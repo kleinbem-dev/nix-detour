@@ -33,6 +33,16 @@ let
     };
   };
 
+  missingRelease = mkHolds {
+    inherit nixpkgs-stable;
+    holds = {
+      hello = {
+        from = "stable";
+        releaseWhen = "nonExistent.subpackage";
+      };
+    };
+  };
+
   consumer =
     config:
     import nixpkgs {
@@ -85,6 +95,7 @@ let
       (brokenPkgs.hello.overrideAttrs {
         pname = "hello";
         version = "0-other";
+        __intentionallyOverridingVersion = true;
       })
       brokenPkgs.python3Packages.six
     ];
@@ -159,6 +170,10 @@ let
         "hello"
         "unrar"
       ];
+    };
+    testReleaseChecksMissingReleaseWhen = {
+      expr = (missingRelease.releaseChecks pkgs).hello.nixHolds.releaseWhen;
+      expected = "nonExistent.subpackage";
     };
 
     testPrPackageInOverlay = {
@@ -238,6 +253,19 @@ let
       );
       expected = [
         "figlet"
+        "hello"
+      ];
+    };
+    testWatchNixosWithoutHomeManager = {
+      expr = builtins.attrNames (
+        watch.nixos {
+          pkgs = brokenPkgs;
+          config = {
+            environment.systemPackages = [ brokenPkgs.hello ];
+          };
+        }
+      );
+      expected = [
         "hello"
       ];
     };

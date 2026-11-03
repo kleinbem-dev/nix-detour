@@ -72,7 +72,11 @@
             pkgs:
             lib.genAttrs (heldIn pkgs) (
               name:
-              lib.getAttrFromPath (lib.splitString "." (entries.${name}.releaseWhen or name)) pkgs
+              let
+                path = lib.splitString "." (entries.${name}.releaseWhen or name);
+                pkg = lib.attrByPath path null pkgs;
+              in
+              (if pkg != null then pkg else { })
               // {
                 nixHolds = entries.${name};
               }
