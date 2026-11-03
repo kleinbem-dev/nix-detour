@@ -22,7 +22,12 @@
 let
   entries = if builtins.isAttrs prs then prs else lib.importJSON prs;
 
-  byName = src: name: "${src}/pkgs/by-name/${lib.substring 0 2 name}/${name}/package.nix";
+  packagePath =
+    entry: src: name:
+    if entry ? paths && entry.paths ? ${name} then
+      "${src}/${entry.paths.${name}}"
+    else
+      "${src}/pkgs/by-name/${lib.substring 0 2 name}/${name}/package.nix";
 
   allAttrs = lib.concatMap (entry: entry.attrs) (lib.attrValues entries);
   allModules = lib.concatMap (entry: lib.attrNames (entry.modules or { })) (lib.attrValues entries);
@@ -37,7 +42,9 @@ let
       src = fetch entry;
       scope = lib.makeScope pkgs.newScope (
         self:
-        lib.genAttrs (entry.attrs ++ entry.scope or [ ]) (name: self.callPackage (byName src name) { })
+        lib.genAttrs (entry.attrs ++ entry.scope or [ ]) (
+          name: self.callPackage (packagePath entry src name) { }
+        )
       );
     in
     lib.getAttrs entry.attrs scope;

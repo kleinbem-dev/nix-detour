@@ -70,6 +70,11 @@ let
           fake-attrs = "nixos/fake-attrs.nix";
         };
       };
+      custom = {
+        pr = 3;
+        attrs = [ "custom-pkg" ];
+        paths.custom-pkg = "pkgs/development/custom-pkg/default.nix";
+      };
     };
   };
   withPrs = import nixpkgs {
@@ -188,9 +193,14 @@ let
       expr = withPrs.hello.version;
       expected = "0.1";
     };
+    testPrCustomPathInOverlay = {
+      expr = withPrs.custom-pkg.version;
+      expected = "2.0";
+    };
     testPrMerged = {
       expr = lib.mapAttrs (_: c: c.merged) prChecks;
       expected = {
+        custom = false;
         fake = false;
         old-hello = true;
       };
@@ -378,10 +388,13 @@ in
         test "$(jq -c '[.quux.from, .quux.override]' held-packages.json)" = '["current","o.nix"]'
         nix-detour hold list > list.txt
         grep -q '^quux  *current+fix ' list.txt
+        nix-detour fix list > fixlist.txt
+        grep -q '^quux  *current+fix ' fixlist.txt
+        if grep -q '^bar ' fixlist.txt; then echo "bar is not a fix; should not be in fix list" >&2; exit 1; fi
         if nix-detour fix add nofix --reason r 2>/dev/null; then echo "fix add without a fix should fail" >&2; exit 1; fi
         if nix-detour fix add missing --patch nope.patch --reason r 2>/dev/null; then echo "a missing patch file should fail" >&2; exit 1; fi
+        nix-detour fix remove quux
         nix-detour hold remove qux
-        nix-detour hold remove quux
 
         # An invalid holds file stays as it is.
         echo '{ broken' > bad.json
@@ -410,6 +423,12 @@ in
         test "$(jq -r 'keys | join(",")' nixpkgs-prs.json)" = berd,mesh
         test "$(jq -c .berd nixpkgs-prs.json)" = '{"pr":2,"owner":"someone","repo":"nixpkgs","rev":"","narHash":"","attrs":["berd"]}'
         nix-detour pr list | grep -q '^mesh  *#571722  *not pinned  *mesh-llm,skippy$'
+        nix-detour pr add custom --pr 3 --repo someone/nixpkgs --attrs custom-pkg \
+          --path custom-pkg=pkgs/development/custom-pkg/default.nix
+        test "$(jq -c .custom.paths nixpkgs-prs.json)" = '{"custom-pkg":"pkgs/development/custom-pkg/default.nix"}'
+        if nix-detour pr add bad --pr 4 --repo a/b --attrs bad --path bad 2>/dev/null; then echo "a path without = should fail" >&2; exit 1; fi
+        if nix-detour pr add bad --pr 4 --repo a/b --attrs pkg --path other=path 2>/dev/null; then echo "a path for an unexported package should fail" >&2; exit 1; fi
+        nix-detour pr remove custom
         if nix-detour pr pin berd abc 2>/dev/null; then echo "pin with a short sha should fail" >&2; exit 1; fi
         if nix-detour pr pin nope 0000000000000000000000000000000000000000 2>/dev/null; then echo "pin of a missing entry should fail" >&2; exit 1; fi
         if nix-detour pr add x --pr 3 --attrs x 2>/dev/null; then echo "add without --repo should fail" >&2; exit 1; fi
