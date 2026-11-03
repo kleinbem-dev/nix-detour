@@ -43,6 +43,26 @@ let
     };
   };
 
+  versionMet = mkHolds {
+    inherit nixpkgs-stable;
+    holds = {
+      hello = {
+        from = "stable";
+        untilVersion = "2.0.0";
+      };
+    };
+  };
+
+  versionUnmet = mkHolds {
+    inherit nixpkgs-stable;
+    holds = {
+      hello = {
+        from = "stable";
+        untilVersion = "99.0.0";
+      };
+    };
+  };
+
   consumer =
     config:
     import nixpkgs {
@@ -179,6 +199,14 @@ let
     testReleaseChecksMissingReleaseWhen = {
       expr = (missingRelease.releaseChecks pkgs).hello.nixHolds.releaseWhen;
       expected = "nonExistent.subpackage";
+    };
+    testUntilVersionMet = {
+      expr = (versionMet.releaseChecks pkgs).hello.outPath;
+      expected = pkgs.hello.outPath;
+    };
+    testUntilVersionUnmet = {
+      expr = (versionUnmet.releaseChecks pkgs).hello ? outPath;
+      expected = false;
     };
 
     testPrPackageInOverlay = {
@@ -364,8 +392,9 @@ in
         test "$(jq -r .bar.releaseWhen held-packages.json)" = python3Packages.bar
         test "$(jq -c .bar.tests held-packages.json)" = '["t1","t2"]'
 
-        nix-detour hold add baz --from stable --reason r
+        nix-detour hold add baz --from stable --reason r --until-version 2.31.0
         test "$(jq -r .baz.from held-packages.json)" = stable
+        test "$(jq -r .baz.untilVersion held-packages.json)" = 2.31.0
         test "$(jq -r 'keys | join(",")' held-packages.json)" = bar,baz,foo
 
         nix-detour hold list | grep -q '^foo  *a  '
