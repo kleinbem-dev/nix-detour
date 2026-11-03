@@ -241,7 +241,8 @@ or a newer version, the entry goes and nixpkgs' package takes over.
 | `pr` | the nixpkgs PR number |
 | `owner`, `repo` | where the PR's branch is (your fork) |
 | `rev`, `narHash` | the pinned commit (`nix-detour pr pin`) |
-| `attrs` | the packages to take from the PR (from `pkgs/by-name`) |
+| `attrs` | the packages to take from the PR (from `pkgs/by-name` by default) |
+| `paths` | optional: custom package paths in the PR, `{"attr": "path/to/package.nix"}` |
 | `scope` | optional: packages of the PR that `attrs` need but that stay unexported |
 | `modules` | optional: NixOS modules of the PR, `{ name = path in the PR; }` |
 

@@ -6,8 +6,8 @@ set -euo pipefail
 usage() {
   cat <<'EOF'
 Usage: nix-detour hold <command> [options]
-       nix-detour fix add NAME --patch URL|FILE... | --override FILE ...
-           (the same as hold add with --from current: the current package, fixed)
+       nix-detour fix <add|list|remove> [options]
+           (manage fixes: the current package or holds with a patch or override)
 
   add NAME --reason TEXT [--link URL] [--from previous|stable|current|REV]
            [--patch URL|FILE]... [--override FILE] [--release-when ATTR] [--tests a,b]
@@ -192,7 +192,9 @@ case "$command" in
     ;;
   list)
     today=$(date -u +%s)
-    holds | jq -r 'to_entries[] | [.key, ((.value.from | if type == "string" then . else .rev[0:12] end)
+    filter='to_entries[]'
+    $fix && filter='to_entries[] | select((.value.patches // []) != [] or .value.override != null or .value.from == "current")'
+    holds | jq -r "$filter"' | [.key, ((.value.from | if type == "string" then . else .rev[0:12] end)
         + (if (.value.patches // []) != [] or .value.override then "+fix" else "" end)),
       (.value.since // ""), (.value.releaseWhen // "")] | join("\u001f")' |
       # \x1f, not a tab: read merges runs of whitespace, so an empty field

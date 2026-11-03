@@ -7,10 +7,11 @@ usage() {
 Usage: nix-detour pr <command> [options]
 
   add NAME --pr NUMBER --repo OWNER/REPO --attrs a,b [--rev SHA]
-           [--scope c,d] [--module NAME=PATH]...
+           [--scope c,d] [--path ATTR=PATH]... [--module NAME=PATH]...
       Add the packages `attrs` of nixpkgs PR NUMBER, whose branch is in
       OWNER/REPO. --rev pins it right away. --scope names packages of the
-      PR the attributes need but that stay unexported; --module adds a
+      PR the attributes need but that stay unexported; --path sets custom
+      package files (default: pkgs/by-name/...); --module adds a
       NixOS module of the PR (a path in the PR's tree).
   pin NAME SHA
       Pin NAME to commit SHA (all 40 characters) of its repository.
@@ -36,7 +37,7 @@ die() {
 }
 
 file=nixpkgs-prs.json flake=. pr="" repo="" attrs="" rev="" scope=""
-modules=()
+modules=() paths=()
 args=()
 need() {
   (($# >= 2)) || die "$1 needs a value"
@@ -50,6 +51,7 @@ while (($#)); do
     --attrs) need "$@"; attrs="$2"; shift 2 ;;
     --rev) need "$@"; rev="$2"; shift 2 ;;
     --scope) need "$@"; scope="$2"; shift 2 ;;
+    --path) need "$@"; paths+=("$2"); shift 2 ;;
     --module) need "$@"; modules+=("$2"); shift 2 ;;
     -h | --help) usage; exit 0 ;;
     -*) die "unknown option $1 (see --help)" ;;
@@ -106,13 +108,26 @@ case "$command" in
       [[ $module == ?*=?* ]] || die "--module needs NAME=PATH"
       modules_json=$(jq --arg n "${module%%=*}" --arg p "${module#*=}" '.[$n] = $p' <<<"$modules_json")
     done
+    paths_json='{}'
+    IFS=',' read -ra allowed <<<"$attrs${scope:+,$scope}"
+    for path in "${paths[@]}"; do
+      [[ $path == ?*=?* ]] || die "--path needs NAME=PATH"
+      pname="${path%%=*}"
+      found=false
+      for a in "${allowed[@]}"; do
+        if [[ $a == "$pname" ]]; then found=true; break; fi
+      done
+      $found || die "--path $pname is not in --attrs or --scope"
+      paths_json=$(jq --arg n "$pname" --arg p "${path#*=}" '.[$n] = $p' <<<"$paths_json")
+    done
     hash=""
     [[ -z $rev ]] || hash=$(nar_hash "$repo")
     entries | jq --arg n "$name" --argjson pr "$pr" --arg owner "${repo%%/*}" --arg repo "${repo#*/}" \
       --arg rev "$rev" --arg h "$hash" \
-      --arg attrs "$attrs" --arg scope "$scope" --argjson modules "$modules_json" '
+      --arg attrs "$attrs" --arg scope "$scope" --argjson modules "$modules_json" --argjson paths "$paths_json" '
       .[$n] = ({pr: $pr, owner: $owner, repo: $repo, rev: $rev, narHash: $h, attrs: ($attrs | split(","))}
         + (if $scope == "" then {} else {scope: ($scope | split(","))} end)
+        + (if $paths == {} then {} else {paths: $paths} end)
         + (if $modules == {} then {} else {modules: $modules} end))' | write_entries
     if [[ -n $rev ]]; then
       echo "added $name, pinned to $rev ($hash)"
