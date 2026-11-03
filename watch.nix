@@ -53,9 +53,11 @@ in
     system:
     let
       inherit (system) config pkgs;
-      home = lib.concatMap (user: user.home.packages or [ ]) (
-        lib.attrValues (config.home-manager.users or { })
-      );
+      home =
+        if config ? home-manager then
+          lib.concatMap (user: user.home.packages or [ ]) (lib.attrValues (config.home-manager.users or { }))
+        else
+          [ ];
     in
     packages {
       inherit pkgs;
