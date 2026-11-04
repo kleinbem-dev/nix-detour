@@ -17,7 +17,7 @@ Usage: nix-detour pr <command> [options]
       Pin NAME to commit SHA (all 40 characters) of its repository.
   remove NAME
       Drop NAME.
-  list
+  list [PATH]
       Show every entry, its PR and where it is pinned.
   eval NAME [--flake REF]
       Evaluate NAME's packages (the flake's nixpkgsPrs) and print their
@@ -25,7 +25,7 @@ Usage: nix-detour pr <command> [options]
   merged [--flake REF]
       Say which entries nixpkgs has in the same or a newer version: they
       can go.
-  check [NAME] [--channel REF] [--upstream OWNER/REPO] [--json]
+  check [NAME|PATH] [--channel REF] [--upstream OWNER/REPO] [--json]
       Check upstream GitHub PR status (draft, open, merged) and whether
       merged PRs have reached the upstream channel (default: nixos-unstable).
 
@@ -39,7 +39,7 @@ die() {
   exit 1
 }
 
-file=nixpkgs-prs.json flake=. pr="" repo="" attrs="" rev="" scope=""
+file=nixpkgs-prs.json file_explicit=false flake=. pr="" repo="" attrs="" rev="" scope=""
 channel=nixos-unstable upstream=NixOS/nixpkgs as_json=false
 modules=() paths=()
 args=()
@@ -48,7 +48,7 @@ need() {
 }
 while (($#)); do
   case "$1" in
-    --file) need "$@"; file="$2"; shift 2 ;;
+    --file) need "$@"; file="$2"; file_explicit=true; shift 2 ;;
     --flake) need "$@"; flake="$2"; shift 2 ;;
     --channel) need "$@"; channel="$2"; shift 2 ;;
     --upstream) need "$@"; upstream="$2"; shift 2 ;;
@@ -68,6 +68,38 @@ done
 ((${#args[@]})) || { usage >&2; exit 1; }
 command="${args[0]}"
 name="${args[1]:-}"
+
+if $file_explicit && [[ "$command" == "list" ]] && [[ -n "$name" ]]; then
+  die "cannot combine --file with a positional target"
+elif ! $file_explicit && [[ -n "$name" ]]; then
+  if [[ "$command" == "list" ]]; then
+    if [[ -d "$name" ]]; then
+      file="$name/nixpkgs-prs.json"
+      name=""
+    elif [[ -f "$name" ]]; then
+      file="$name"
+      name=""
+    else
+      die "target path '$name' not found"
+    fi
+  elif [[ "$command" == "check" ]]; then
+    if [[ "$name" == */* || "$name" == *.json ]]; then
+      if [[ -d "$name" ]]; then
+        file="$name/nixpkgs-prs.json"
+        name=""
+      elif [[ -f "$name" ]]; then
+        file="$name"
+        name=""
+      fi
+    elif [[ -d "$name" ]] && ! { [[ -f "$file" ]] && jq -e --arg n "$name" 'has($n)' "$file" >/dev/null 2>&1; }; then
+      file="$name/nixpkgs-prs.json"
+      name=""
+    elif [[ -f "$name" ]] && ! { [[ -f "$file" ]] && jq -e --arg n "$name" 'has($n)' "$file" >/dev/null 2>&1; }; then
+      file="$name"
+      name=""
+    fi
+  fi
+fi
 
 entries() {
   if [[ -e $file ]]; then

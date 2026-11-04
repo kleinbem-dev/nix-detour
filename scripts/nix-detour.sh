@@ -79,9 +79,9 @@ Commands:
   hold ...     manage package holds (nix-detour hold --help)
   fix ...      manage package fixes with patches/overrides (nix-detour fix --help)
   pr ...       manage packages from open nixpkgs PRs (nix-detour pr --help)
-  list         list all active holds, fixes, and PR detours
-  check        check upstream status for both holds and PRs
-  release NAME release and retire a hold, fix, or PR detour
+  list [PATH]  list all active holds, fixes, and PR detours
+  check [PATH] check upstream status for both holds and PRs
+  release NAME [PATH] release and retire a hold, fix, or PR detour
   web          launch the interactive web dashboard (nix-detour web --help)
 EOF
     [[ -n "${1:-}" ]] || exit 1
@@ -90,7 +90,8 @@ EOF
   *) die "unknown command $1 (see --help)" ;;
 esac
 
-file=held-packages.json lock=flake.lock input=nixpkgs
+file=held-packages.json prs_file=nixpkgs-prs.json lock=flake.lock input=nixpkgs
+file_explicit=false lock_explicit=false flake_explicit=false
 from=previous reason="" link="" release_when="" until_version="" tests="" flake=. channel=github:NixOS/nixpkgs/nixos-unstable
 override=""
 args=() patches=()
@@ -101,8 +102,8 @@ need() {
 }
 while (($#)); do
   case "$1" in
-    --file) need "$@"; file="$2"; shift 2 ;;
-    --lock) need "$@"; lock="$2"; shift 2 ;;
+    --file) need "$@"; file="$2"; file_explicit=true; shift 2 ;;
+    --lock) need "$@"; lock="$2"; lock_explicit=true; shift 2 ;;
     --input) need "$@"; input="$2"; shift 2 ;;
     --from) need "$@"; from="$2"; shift 2 ;;
     --reason) need "$@"; reason="$2"; shift 2 ;;
@@ -112,13 +113,77 @@ while (($#)); do
     --tests) need "$@"; tests="$2"; shift 2 ;;
     --patch) need "$@"; patches+=("$2"); shift 2 ;;
     --override) need "$@"; override="$2"; shift 2 ;;
-    --flake) need "$@"; flake="$2"; shift 2 ;;
+    --flake) need "$@"; flake="$2"; flake_explicit=true; shift 2 ;;
     --channel) need "$@"; channel="$2"; shift 2 ;;
     -h | --help) usage; exit 0 ;;
     -*) die "unknown option $1 (see --help)" ;;
     *) args+=("$1"); shift ;;
   esac
 done
+
+to_flake() {
+  local p="$1"
+  if [[ "$p" != /* && "$p" != ./* && "$p" != ../* ]]; then
+    echo "./$p"
+  else
+    echo "$p"
+  fi
+}
+
+if $file_explicit; then
+  dir=$(dirname "$file")
+  prs_file="$dir/nixpkgs-prs.json"
+fi
+
+if $file_explicit && ((${#args[@]} >= 1)); then
+  if $all_list || $all_check || { [[ "${args[0]:-}" == "list" || "${args[0]:-}" == "check" ]] && [[ -n "${args[1]:-}" ]]; }; then
+    die "cannot combine --file with a positional target"
+  fi
+elif ((${#args[@]} >= 1)); then
+  if $all_list || $all_check; then
+    target="${args[0]}"
+    if [[ -d "$target" ]]; then
+      file="$target/held-packages.json"
+      prs_file="$target/nixpkgs-prs.json"
+      $lock_explicit || lock="$target/flake.lock"
+      $flake_explicit || flake=$(to_flake "$target")
+    elif [[ -f "$target" ]]; then
+      dir=$(dirname "$target")
+      if [[ "${target##*/}" == *nixpkgs-prs.json* ]]; then
+        prs_file="$target"
+        file="$dir/held-packages.json"
+      else
+        file="$target"
+        prs_file="$dir/nixpkgs-prs.json"
+      fi
+      $lock_explicit || lock="$dir/flake.lock"
+      $flake_explicit || flake=$(to_flake "$dir")
+    else
+      die "target path '$target' not found"
+    fi
+  elif [[ "${args[0]}" == "list" || "${args[0]}" == "check" ]] && [[ -n "${args[1]:-}" ]]; then
+    target="${args[1]}"
+    if [[ -d "$target" ]]; then
+      file="$target/held-packages.json"
+      prs_file="$target/nixpkgs-prs.json"
+      $lock_explicit || lock="$target/flake.lock"
+      $flake_explicit || flake=$(to_flake "$target")
+    elif [[ -f "$target" ]]; then
+      dir=$(dirname "$target")
+      if [[ "${target##*/}" == *nixpkgs-prs.json* ]]; then
+        prs_file="$target"
+        file="$dir/held-packages.json"
+      else
+        file="$target"
+        prs_file="$dir/nixpkgs-prs.json"
+      fi
+      $lock_explicit || lock="$dir/flake.lock"
+      $flake_explicit || flake=$(to_flake "$dir")
+    else
+      die "target path '$target' not found"
+    fi
+  fi
+fi
 
 holds() {
   if [[ -e $file ]]; then
@@ -145,14 +210,14 @@ if $all_check; then
     @releaseCheck@ "$flake" "$channel" || failed=true
     ran=true
   fi
-  if [[ -f nixpkgs-prs.json ]]; then
+  if [[ -f $prs_file ]]; then
     if $ran; then echo ""; fi
     echo "=== PRs ==="
-    @prs@ check --channel "$channel" || failed=true
+    @prs@ check --file "$prs_file" --channel "$channel" || failed=true
     ran=true
   fi
   if ! $ran; then
-    echo "nix-detour: neither $file nor nixpkgs-prs.json found"
+    echo "nix-detour: neither $file nor $prs_file found"
     exit 1
   fi
   $failed && exit 1
@@ -174,10 +239,10 @@ if $all_list; then
       done
     has_output=true
   fi
-  if [[ -f nixpkgs-prs.json ]] && (($(jq 'keys | length' nixpkgs-prs.json 2>/dev/null || echo 0) > 0)); then
+  if [[ -f $prs_file ]] && (($(jq 'keys | length' "$prs_file" 2>/dev/null || echo 0) > 0)); then
     $has_output && echo ""
     echo "=== PRs ==="
-    @prs@ list
+    @prs@ list --file "$prs_file"
     has_output=true
   fi
   if ! $has_output; then
@@ -188,6 +253,26 @@ fi
 
 if $all_release; then
   name="${args[0]:-}"
+  target="${args[1]:-}"
+  if [[ -n "$target" ]]; then
+    if $file_explicit; then
+      die "release: use either --file or PATH, not both"
+    fi
+    if [[ -d "$target" ]]; then
+      file="$target/held-packages.json"
+      prs_file="$target/nixpkgs-prs.json"
+    elif [[ -f "$target" ]]; then
+      if [[ "${target##*/}" == *nixpkgs-prs.json* ]]; then
+        prs_file="$target"
+        file="$(dirname "$target")/held-packages.json"
+      else
+        file="$target"
+        prs_file="$(dirname "$target")/nixpkgs-prs.json"
+      fi
+    else
+      die "target path '$target' not found"
+    fi
+  fi
   [[ -n $name ]] || die "release needs package name"
   found=false
   if [[ -f $file ]] && jq -e --arg n "$name" 'has($n)' "$file" >/dev/null 2>&1; then
@@ -195,8 +280,8 @@ if $all_release; then
     echo "released hold $name"
     found=true
   fi
-  if [[ -f nixpkgs-prs.json ]] && jq -e --arg n "$name" 'has($n)' nixpkgs-prs.json >/dev/null 2>&1; then
-    @prs@ remove "$name"
+  if [[ -f $prs_file ]] && jq -e --arg n "$name" 'has($n)' "$prs_file" >/dev/null 2>&1; then
+    @prs@ remove "$name" --file "$prs_file"
     found=true
   fi
   if ! $found; then
