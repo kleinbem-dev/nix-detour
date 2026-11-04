@@ -101,38 +101,6 @@
       # packages (`nix-detour pr`). Nix itself comes from the user's PATH.
       packages = forAllSystems (pkgs: {
         default = self.packages.${pkgs.stdenv.hostPlatform.system}.nix-detour;
-        nix-detour =
-          let
-            releaseCheck = pkgs.writeShellApplication {
-              name = "nix-detour-release-check";
-              runtimeInputs = [
-                pkgs.coreutils
-                pkgs.jq
-              ];
-              text = builtins.readFile ./scripts/release-check.sh;
-            };
-            prs = pkgs.writeShellApplication {
-              name = "nix-detour-pr";
-              runtimeInputs = [
-                pkgs.coreutils
-                pkgs.curl
-                pkgs.jq
-              ];
-              text = builtins.readFile ./scripts/prs.sh;
-            };
-          in
-          pkgs.writeShellApplication {
-            name = "nix-detour";
-            runtimeInputs = [
-              pkgs.coreutils
-              pkgs.git
-              pkgs.jq
-            ];
-            text =
-              builtins.replaceStrings [ "@releaseCheck@" "@prs@" ] [ (lib.getExe releaseCheck) (lib.getExe prs) ]
-                (builtins.readFile ./scripts/nix-detour.sh);
-          };
-
         web = pkgs.buildNpmPackage {
           pname = "nix-detour-web";
           version = "0.1.0";
@@ -152,10 +120,46 @@
           name = "nix-detour-web-server";
           runtimeInputs = [ pkgs.python3 ];
           text = ''
-            port="''${1:-8080}"
-            exec python3 ${./web/server.py} "$port" "${self.packages.${pkgs.stdenv.hostPlatform.system}.web}"
+            exec python3 ${./web/server.py} --static-dir "${
+              self.packages.${pkgs.stdenv.hostPlatform.system}.web
+            }" "$@"
           '';
         };
+
+        nix-detour =
+          let
+            releaseCheck = pkgs.writeShellApplication {
+              name = "nix-detour-release-check";
+              runtimeInputs = [
+                pkgs.coreutils
+                pkgs.jq
+              ];
+              text = builtins.readFile ./scripts/release-check.sh;
+            };
+            prs = pkgs.writeShellApplication {
+              name = "nix-detour-pr";
+              runtimeInputs = [
+                pkgs.coreutils
+                pkgs.curl
+                pkgs.jq
+              ];
+              text = builtins.readFile ./scripts/prs.sh;
+            };
+            webServer = self.packages.${pkgs.stdenv.hostPlatform.system}.web-server;
+          in
+          pkgs.writeShellApplication {
+            name = "nix-detour";
+            runtimeInputs = [
+              pkgs.coreutils
+              pkgs.git
+              pkgs.jq
+            ];
+            text =
+              builtins.replaceStrings
+                [ "@releaseCheck@" "@prs@" "@webServer@" ]
+                [ (lib.getExe releaseCheck) (lib.getExe prs) (lib.getExe webServer) ]
+                (builtins.readFile ./scripts/nix-detour.sh);
+          };
       });
 
       apps = forAllSystems (pkgs: {

@@ -111,14 +111,17 @@ hold or PR and removes it cleanly.
 ## Web dashboard
 
 ```sh
-nix run github:kleinbem-dev/nix-detour#web
+nix run github:kleinbem-dev/nix-detour -- web           # launch dashboard via CLI
+nix run github:kleinbem-dev/nix-detour#web               # launch dashboard app directly
+nix run github:kleinbem-dev/nix-detour -- web --port 3000 --data-dir ./my-config
 ```
 
 Launches an interactive local Svelte 5 dashboard to visualize active holds,
 fixes, and PR detours across your fleet. It provides live two-way sync with
-`held-packages.json` and `nixpkgs-prs.json`, queries upstream GitHub PR states
-and channel landing in real-time, displays status badges (Draft, Open, Merged,
-In Channel), and offers one-click release actions when upstream is ready.
+`held-packages.json` and `nixpkgs-prs.json` (with automatic discovery across workspace
+repos), queries upstream GitHub PR states and channel landing in real-time, displays
+status badges (Draft, Open, Merged, In Channel), provides a dedicated "Ready" filter,
+and offers one-click release and CLI copy actions.
 
 ## Lifecycle
 

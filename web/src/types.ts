@@ -33,6 +33,20 @@ export interface PrEntry {
 }
 
 export type DetourKind = 'hold' | 'fix' | 'pr';
+export type DetourFilter = DetourKind | 'all' | 'stale' | 'ready';
+
+export interface PrStatusInfo {
+  pr: number;
+  status: 'in-channel' | 'merged' | 'open' | 'draft' | 'closed' | 'unknown';
+  state: string;
+  draft: boolean;
+  merged: boolean;
+  inChannel: boolean;
+  details: string;
+  title: string;
+  url: string;
+  channel?: string;
+}
 
 export interface DetourItem {
   id: string;
