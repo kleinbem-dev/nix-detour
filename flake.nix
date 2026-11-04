@@ -136,7 +136,9 @@
           pname = "nix-detour-web";
           version = "0.1.0";
           src = ./web;
-          npmDepsHash = "sha256-KGwcLQO9ftR1fmoZf1HTPwuCQYKsJO9Dd3pbXPedlRg=";
+          # Hashes come from package-lock.json, so Dependabot bumps need no hash update.
+          npmDeps = pkgs.importNpmLock { npmRoot = ./web; };
+          npmConfigHook = pkgs.importNpmLock.npmConfigHook;
           installPhase = ''
             runHook preInstall
             cp -r dist $out
