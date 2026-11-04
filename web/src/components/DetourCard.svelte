@@ -7,9 +7,40 @@
     onRelease?: (item: DetourItem) => void;
   }
 
+  interface PrStatus {
+    pr: number;
+    status: 'in-channel' | 'merged' | 'open' | 'draft' | 'closed' | 'unknown';
+    state: string;
+    draft: boolean;
+    merged: boolean;
+    inChannel: boolean;
+    details: string;
+    title: string;
+    url: string;
+    channel?: string;
+  }
+
   let { item, onSelect, onRelease }: Props = $props();
 
   let copied = $state(false);
+  let prStatus = $state<PrStatus | null>(null);
+
+  $effect(() => {
+    prStatus = null;
+    if (item.kind === 'pr' && item.prNumber) {
+      const controller = new AbortController();
+      const currentPr = item.prNumber;
+      fetch(`/api/pr-status?pr=${currentPr}`, { signal: controller.signal })
+        .then((r) => (r.ok ? r.json() : null))
+        .then((data) => {
+          if (data && item.prNumber === currentPr) {
+            prStatus = data;
+          }
+        })
+        .catch(() => {});
+      return () => controller.abort();
+    }
+  });
 
   function copyName(e: MouseEvent) {
     e.stopPropagation();
@@ -25,6 +56,7 @@
     }
   }
   function handleKeyDown(e: KeyboardEvent) {
+    if (e.target !== e.currentTarget) return;
     if (e.key === 'Enter' || e.key === ' ') {
       e.preventDefault();
       onSelect(item);
@@ -58,6 +90,34 @@
             <span class="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
             PR #{item.prNumber}
           </span>
+          {#if prStatus}
+            {#if prStatus.status === 'in-channel'}
+              <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-500/20 text-emerald-300 border border-emerald-500/60 animate-pulse" title={prStatus.details}>
+                <span class="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
+                In Channel
+              </span>
+            {:else if prStatus.status === 'merged'}
+              <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-purple-500/20 text-purple-300 border border-purple-500/50" title={prStatus.details}>
+                <span class="w-1.5 h-1.5 rounded-full bg-purple-400"></span>
+                Merged Upstream
+              </span>
+            {:else if prStatus.status === 'draft'}
+              <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-amber-500/20 text-amber-300 border border-amber-500/50" title={prStatus.details}>
+                <span class="w-1.5 h-1.5 rounded-full bg-amber-400"></span>
+                Draft
+              </span>
+            {:else if prStatus.status === 'closed'}
+              <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-rose-500/20 text-rose-300 border border-rose-500/50" title={prStatus.details}>
+                <span class="w-1.5 h-1.5 rounded-full bg-rose-400"></span>
+                Closed
+              </span>
+            {:else if prStatus.status === 'open'}
+              <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-blue-500/20 text-blue-300 border border-blue-500/50" title={prStatus.details}>
+                <span class="w-1.5 h-1.5 rounded-full bg-blue-400"></span>
+                Open Upstream
+              </span>
+            {/if}
+          {/if}
         {/if}
 
         <span class="text-xs font-mono px-2 py-0.5 rounded bg-stone-800/70 text-stone-300 border border-stone-700/50">
@@ -71,6 +131,24 @@
         </span>
       {/if}
     </div>
+
+    {#if prStatus?.status === 'in-channel'}
+      <div class="mb-3 px-3 py-2 rounded-lg bg-emerald-950/70 border border-emerald-600/50 flex items-center justify-between text-xs text-emerald-200">
+        <div class="flex items-center gap-1.5">
+          <span>✨</span>
+          <span><strong>Ready to Release:</strong> PR #{item.prNumber} is available in {prStatus.channel || 'nixos-unstable'}!</span>
+        </div>
+        {#if onRelease}
+          <button
+            type="button"
+            onclick={handleRelease}
+            class="px-2 py-0.5 rounded bg-emerald-600 hover:bg-emerald-500 text-stone-950 font-semibold text-xs transition cursor-pointer"
+          >
+            Release
+          </button>
+        {/if}
+      </div>
+    {/if}
 
     <!-- Package Name -->
     <div class="flex items-center justify-between gap-2 mb-2">
@@ -152,9 +230,9 @@
 
   <!-- Bottom actions / footer -->
   <div class="flex items-center justify-between pt-3 border-t border-stone-800/60 text-xs">
-    {#if item.link}
+    {#if item.link || prStatus?.url}
       <a
-        href={item.link}
+        href={item.link || prStatus?.url}
         target="_blank"
         rel="noopener noreferrer"
         onclick={(e) => e.stopPropagation()}
