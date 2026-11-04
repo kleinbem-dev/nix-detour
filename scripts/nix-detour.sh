@@ -10,13 +10,16 @@ Usage: nix-detour hold <command> [options]
            (manage fixes: the current package or holds with a patch or override)
 
   add NAME --reason TEXT [--link URL] [--from previous|stable|current|REV]
-           [--patch URL|FILE]... [--override FILE] [--release-when ATTR] [--tests a,b]
+           [--patch URL|FILE]... [--override FILE] [--release-when ATTR]
+           [--until-version VERSION] [--tests a,b]
       Hold NAME. --from previous (the default) takes the nixpkgs your
       flake.lock had before its last change to that input, from git history.
       --patch and --override fix the package on top: a patch URL is pinned
       by its hash, a FILE is relative to the holds file's directory, and
       --override FILE holds `{ pkgs, package }: <the fixed package>`.
       Either way it ends once NAME, unfixed, builds from nixos-unstable.
+      --until-version VERSION delays release until the upstream package
+      version is at least VERSION.
   remove NAME
       Drop the hold of NAME.
   list
@@ -64,7 +67,7 @@ EOF
 esac
 
 file=held-packages.json lock=flake.lock input=nixpkgs
-from=previous reason="" link="" release_when="" tests="" flake=. channel=github:NixOS/nixpkgs/nixos-unstable
+from=previous reason="" link="" release_when="" until_version="" tests="" flake=. channel=github:NixOS/nixpkgs/nixos-unstable
 override=""
 args=() patches=()
 $fix && from=current
@@ -81,6 +84,7 @@ while (($#)); do
     --reason) need "$@"; reason="$2"; shift 2 ;;
     --link) need "$@"; link="$2"; shift 2 ;;
     --release-when) need "$@"; release_when="$2"; shift 2 ;;
+    --until-version) need "$@"; until_version="$2"; shift 2 ;;
     --tests) need "$@"; tests="$2"; shift 2 ;;
     --patch) need "$@"; patches+=("$2"); shift 2 ;;
     --override) need "$@"; override="$2"; shift 2 ;;
@@ -169,12 +173,13 @@ case "$command" in
         ;;
     esac
     holds | jq --arg n "$name" --argjson from "$source" --arg since "$(date -u +%F)" \
-      --arg reason "$reason" --arg link "$link" --arg rw "$release_when" --arg tests "$tests" \
+      --arg reason "$reason" --arg link "$link" --arg rw "$release_when" --arg uv "$until_version" --arg tests "$tests" \
       --argjson patches "$patches_json" --arg override "$override" '
       .[$n] = ({from: $from, since: $since}
         + (if $patches == [] then {} else {patches: $patches} end)
         + (if $override == "" then {} else {override: $override} end)
         + (if $rw == "" then {} else {releaseWhen: $rw} end)
+        + (if $uv == "" then {} else {untilVersion: $uv} end)
         + {reason: $reason}
         + (if $link == "" then {} else {link: $link} end)
         + (if $tests == "" then {} else {tests: ($tests | split(","))} end))' | write_holds

@@ -98,6 +98,14 @@ broke it. `--from stable` or `--from <rev>` choose another. `hold remove` drops 
 hold, and `hold check` runs the release checks locally. `--file`, `--lock` and
 `--input` point it at another holds file, lock or nixpkgs input.
 
+## Web dashboard
+
+```sh
+nix run github:kleinbem-dev/nix-detour#web
+```
+
+Launches an interactive local Svelte 5 dashboard to visualize active holds, fixes, and PR detours across your fleet, inspect release conditions, and generate detour CLI commands.
+
 ## Lifecycle
 
 1. **Hold:** `nix-detour hold add` in a PR, with the reason and the upstream link.

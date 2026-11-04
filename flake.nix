@@ -73,12 +73,18 @@
             lib.genAttrs (heldIn pkgs) (
               name:
               let
-                path = lib.splitString "." (entries.${name}.releaseWhen or name);
+                entry = entries.${name};
+                path = lib.splitString "." (entry.releaseWhen or name);
                 pkg = lib.attrByPath path null pkgs;
+                versionSatisfied =
+                  if entry ? untilVersion && pkg != null && pkg ? version then
+                    builtins.compareVersions pkg.version entry.untilVersion >= 0
+                  else
+                    true;
               in
-              (if pkg != null then pkg else { })
+              (if pkg != null && versionSatisfied then pkg else { })
               // {
-                nixHolds = entries.${name};
+                nixHolds = entry;
               }
             );
         };
@@ -125,6 +131,40 @@
               builtins.replaceStrings [ "@releaseCheck@" "@prs@" ] [ (lib.getExe releaseCheck) (lib.getExe prs) ]
                 (builtins.readFile ./scripts/nix-detour.sh);
           };
+
+        web = pkgs.buildNpmPackage {
+          pname = "nix-detour-web";
+          version = "0.1.0";
+          src = ./web;
+          npmDepsHash = "sha256-KGwcLQO9ftR1fmoZf1HTPwuCQYKsJO9Dd3pbXPedlRg=";
+          installPhase = ''
+            runHook preInstall
+            cp -r dist $out
+            runHook postInstall
+          '';
+        };
+
+        web-server = pkgs.writeShellApplication {
+          name = "nix-detour-web-server";
+          runtimeInputs = [ pkgs.python3 ];
+          text = ''
+            port="''${1:-8080}"
+            exec python3 ${./web/server.py} "$port" "${self.packages.${pkgs.stdenv.hostPlatform.system}.web}"
+          '';
+        };
+      });
+
+      apps = forAllSystems (pkgs: {
+        default = {
+          type = "app";
+          program = lib.getExe self.packages.${pkgs.stdenv.hostPlatform.system}.nix-detour;
+          meta.description = "The nix-detour CLI";
+        };
+        web = {
+          type = "app";
+          program = lib.getExe self.packages.${pkgs.stdenv.hostPlatform.system}.web-server;
+          meta.description = "Run the nix-detour web dashboard";
+        };
       });
 
       # Tests of mkHolds, mkPrs and the CLI.
