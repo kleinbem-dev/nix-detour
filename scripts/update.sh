@@ -1,26 +1,15 @@
 #!/usr/bin/env bash
 # Usage: scripts/update.sh FLAKE [--no-build] [--only a,b]
 #
-# After a lock update: finds the packages FLAKE uses that fail, so they can
-# be held. Two ways, each used when the flake has the output:
+# After a lock update, finds the failing packages FLAKE uses, so they can be held:
+# nixDetourWatch packages are evaluated one by one and built if no substituter has
+# them; for each failing nixDetourTargets target, the innermost derivation in the
+# trace that fails on its own in pkgs (one per target and run).
 #
-# - nixDetourWatch.<system> (lib.watch.packages/nixos): each package is
-#   evaluated on its own; those that evaluate but that no substituter has
-#   are built (unless --no-build).
-# - nixDetourTargets.<system>.<name> = { target; pkgs; } (lib.watch.target):
-#   each target (a host's toplevel) is evaluated; on failure, the package to
-#   hold is the innermost derivation in the error's trace that is a
-#   top-level attribute of pkgs and fails on its own there. One per target
-#   and run: hold it and run again for the next.
-#
-# Prints "broken <name> <reason>" per package to hold, "unattributed
-# <target> <reason>" for a target that fails without one, and "ok <system> <count>"
-# for the watched packages that pass. --only limits the watched packages to
-# those names. NIX_DETOUR_ARGS: extra arguments for every nix eval and build
-# (such as --override-input), split on spaces; NIX_DETOUR_OVERRIDE is added
-# to them (clone-holds.sh sets it). NIX_DETOUR_SYSTEMS: the
-# systems to check, split on spaces (default: this one); evaluation works for
-# any system, builds only for this one.
+# Prints "broken <name> <reason>", "unattributed <target> <reason>" and
+# "ok <system> <count>". NIX_DETOUR_ARGS and NIX_DETOUR_OVERRIDE go to every flake
+# eval and build; NIX_DETOUR_SYSTEMS (default: this one) are evaluated, only this
+# one built.
 set -uo pipefail
 
 flake="$1"
@@ -71,8 +60,7 @@ has_output() {
 check() {
   local system="$1" results broken watch targets target err chain name why list watchOut targetsOut
   results='{}' broken=()
-  # The outputs were named nixHoldsWatch/nixHoldsTargets before nix-holds
-  # became nix-detour; the old names still work.
+  # The old nix-holds output names still work, with a warning.
   watchOut=nixDetourWatch targetsOut=nixDetourTargets
   if ! has_output nixDetourWatch && has_output nixHoldsWatch; then
     echo "nixHoldsWatch is now nixDetourWatch; rename the output" >&2

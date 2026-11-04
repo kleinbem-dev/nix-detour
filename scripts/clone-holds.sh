@@ -1,12 +1,9 @@
 #!/usr/bin/env bash
 # Usage: scripts/clone-holds.sh
 #
-# The update action's first step when the holds file is in another
-# repository (HOLDS_REPO): clones it at the revision the flake's lock has for
-# HOLDS_INPUT (the one the lock update was validated with) and exports,
-# through GITHUB_ENV, NIX_DETOUR_HOLDS_CLONE (the clone) and
-# NIX_DETOUR_OVERRIDE (the --override-input of HOLDS_INPUT with the clone),
-# so every check, the first one included, sees those holds.
+# For a holds file in another repository (HOLDS_REPO): clones it at the revision
+# the lock has for HOLDS_INPUT and exports NIX_DETOUR_HOLDS_CLONE and
+# NIX_DETOUR_OVERRIDE to GITHUB_ENV, so every check sees those holds.
 set -euo pipefail
 
 [[ -n ${HOLDS_INPUT:-} ]] || { echo "holds-repo needs holds-input (its flake input here)" >&2; exit 1; }

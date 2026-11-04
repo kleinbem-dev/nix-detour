@@ -1,11 +1,9 @@
 #!/usr/bin/env bash
 # Usage: scripts/open-signed-pr.sh BRANCH TITLE BODY [--draft] PATH...
 #
-# Commits the current content of PATH... (a missing PATH is deleted) to BRANCH,
-# reset to main, through GraphQL createCommitOnBranch, so GitHub signs the
-# commit and it satisfies the required_signatures ruleset without key material
-# in CI. Then opens a PR for it with squash auto-merge, or a draft without
-# auto-merge (--draft). Needs GH_TOKEN (the App token) and GITHUB_REPOSITORY.
+# Resets BRANCH to main and commits PATH... (a missing PATH is deleted) via GraphQL
+# createCommitOnBranch, so GitHub signs it with no key in CI. Then opens a PR with
+# squash auto-merge, or a draft (--draft). Needs GH_TOKEN and GITHUB_REPOSITORY.
 set -euo pipefail
 
 branch="$1" title="$2" body="$3"

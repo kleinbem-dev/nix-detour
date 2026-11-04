@@ -1,8 +1,6 @@
-# What the update action checks after a lock update: the top-level packages a
-# configuration installs, by name. Only top-level attributes can be held, so a
-# package is watched when the package set has an attribute of its name that
-# is the same package. A broken package can't be compared (its outPath
-# throws), so one whose attribute throws as well counts as the same.
+# What the update action checks after a lock update. Only top-level attributes
+# can be held, so a package is watched when the attribute of its name is the same
+# package; a broken one (outPath throws) matches an attribute that throws too.
 { lib }:
 let
   try = builtins.tryEval;

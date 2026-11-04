@@ -1,11 +1,8 @@
 #!/usr/bin/env bash
 # Usage: scripts/release-check.sh FLAKE CHANNEL
 #
-# Builds each of FLAKE's release checks (releaseChecks.<system>.<name>, from
-# mkHolds) with the flake's nixpkgs set to CHANNEL. The holds, their names and
-# dates, come from those checks, so they are the ones the flake uses. Prints
-# "release <name>" for each that builds and "held <name> <days>" for the
-# others (no days for a hold without `since`).
+# Builds FLAKE's releaseChecks.<system>.* with its nixpkgs set to CHANNEL. Prints
+# "release <name>" for each that builds, else "held <name> [<days since>]".
 set -uo pipefail
 
 flake="$1" channel="$2"

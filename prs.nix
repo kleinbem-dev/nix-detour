@@ -1,10 +1,6 @@
-# Packages and NixOS modules from open nixpkgs pull requests: the other way
-# round from a hold. Each entry pins a PR at one commit; its packages are
-# built from the PR's own package files against the consumer's nixpkgs, so
-# what runs is exactly what the PR contains, never a copy. An entry goes once
-# the consumer's nixpkgs has its packages in the same or a newer version.
-#
-# Plain Nix (no flake needed): `import ./prs.nix { inherit lib; prs = ...; }`.
+# Packages and NixOS modules from open nixpkgs PRs, each pinned at one commit and
+# built from the PR's own files against your nixpkgs, so you run exactly the PR.
+# Works without flakes: `import ./prs.nix { inherit lib; prs = ...; }`.
 {
   lib,
   # The PRs file (a path) or the same as an attrset.
@@ -60,12 +56,9 @@ assert lib.assertMsg (lib.allUnique allModules) "nix-detour prs: a module name i
   # applied to.
   overlay = final: _prev: packages final;
 
-  # Every entry's NixOS modules, without their meta.doc: the NixOS manual
-  # only accepts chapters whose identifiers are in nixpkgs' own
-  # redirects.json, so an out-of-tree chapter fails the manual build. The
-  # options are documented either way. The module system passes only the
-  # arguments a module names, so the wrapper of a function module takes over
-  # its argument names. A module needs its packages: apply the overlay too.
+  # Without meta.doc: the manual build rejects chapters missing from nixpkgs'
+  # redirects.json. Wrappers keep the function's argument names, since the module
+  # system passes only named arguments. The modules need the overlay too.
   nixosModules =
     let
       withoutDoc = module: module // { meta = removeAttrs (module.meta or { }) [ "doc" ]; };
