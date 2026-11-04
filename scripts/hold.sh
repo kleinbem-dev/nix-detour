@@ -1,14 +1,11 @@
 #!/usr/bin/env bash
 # Usage: scripts/hold.sh RESULTS
 #
-# The update action's second step. RESULTS is update.sh's output for the
-# lock update. Holds each broken package on the nixpkgs of BASE's flake.lock
-# and runs update.sh again: a package that still fails while held (or was
-# held already) can't be fixed by a hold; a package found only now (the next
-# failure of a target) is held in the next round, up to 5 rounds. With
-# HOLDS_REPO, the holds file is in that repository: clone-holds.sh cloned it
-# and points the checks at the clone, and commit mode opens a PR there.
-# Without the holds file nothing can be checked: one round, unchecked.
+# RESULTS is update.sh's output. Holds each broken package on the nixpkgs of
+# BASE's flake.lock and reruns update.sh, up to 5 rounds, since a target only
+# shows its next failure once the first is held. One that still fails held (or
+# was held already) is reported instead. Without a holds file nothing is checked.
+# With HOLDS_REPO (cloned by clone-holds.sh), commit mode opens a PR there.
 #
 # Environment: FLAKE, HOLDS, INPUT, BASE, MODE (commit|report), BRANCH,
 # BUILD (true|false), NIX_DETOUR_ARGS, GH_TOKEN, HOLDS_REPO, HOLDS_INPUT,

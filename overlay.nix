@@ -1,18 +1,8 @@
-# The overlay: every held package comes from the nixpkgs its entry names
-# instead of the consumer's nixpkgs, and an entry with a fix gets it on top.
-#
-# "stable" is the consumer's nixpkgs-stable, which keeps getting security
-# fixes; a rev + narHash pins a nixos-unstable commit, usually the last one
-# the consumer ran; "current" is the consumer's own nixpkgs, for a fix on the
-# package as it is now. That nixpkgs gets `extraOverlays`, so a consumer's own
-# packages can be held too, and the consumer's nixpkgs config: `config` if
-# given, else the settings in `carriedConfig` taken from the consumer's
-# package set (its whole evaluated config doesn't type-check in another
-# nixpkgs). Entries the consumer's package set doesn't have are left out.
-#
-# A fix: `patches` (files relative to `root`, the holds file's directory, or
-# `{ url, hash }`) added to the package's own, and/or `override`, a file
-# relative to `root` holding `{ pkgs, package }: <the fixed package>`.
+# Each held package comes from the nixpkgs its entry names (`from`: "stable" is
+# nixpkgs-stable, "current" your own nixpkgs, or a rev + narHash), plus its fix:
+# `patches` (relative to the holds file, or { url, hash }) and/or `override`, a
+# file holding `{ pkgs, package }: <the fixed package>`. Packages your set lacks
+# are skipped.
 {
   holds,
   nixpkgs-stable,
@@ -25,6 +15,7 @@ final: prev:
 let
   inherit (prev) lib;
 
+  # Only these settings: a whole evaluated config doesn't type-check in another nixpkgs.
   carriedConfig = [
     "allowAliases"
     "allowBroken"

@@ -1,10 +1,9 @@
 #!/usr/bin/env bash
 # Usage: scripts/commit-signed.sh BRANCH HEADLINE PATH...
 #
-# Commits the current content of PATH... on top of BRANCH (an existing
-# branch, such as a lock-update PR's) through GraphQL createCommitOnBranch, so
-# GitHub signs the commit without key material in CI. Fails if BRANCH moved
-# since it was read. Needs GH_TOKEN and GITHUB_REPOSITORY.
+# Commits PATH... onto the existing BRANCH via GraphQL createCommitOnBranch, so
+# GitHub signs it with no key in CI. Fails if BRANCH moved meanwhile.
+# Needs GH_TOKEN and GITHUB_REPOSITORY.
 set -euo pipefail
 
 branch="$1" headline="$2"

@@ -23,14 +23,9 @@
       forAllSystems = f: lib.genAttrs systems (system: f nixpkgs.legacyPackages.${system});
     in
     {
-      # The holds of one consumer.
-      #   holds: its held-packages.json (a path) or the same as an attrset
-      #   nixpkgs-stable: the nixpkgs behind `from = "stable"`
-      #   extraOverlays: its own package overlays, so its packages can be
-      #     held too
-      #   config: its nixpkgs config for the held package sets; by default
-      #     the usual settings (allowUnfree, insecure packages, CUDA, ...)
-      #     are taken from the package set the overlay is applied to
+      # holds: held-packages.json (a path) or an attrset; nixpkgs-stable: for `from = "stable"`.
+      # extraOverlays: your own overlays, so your own packages can be held too.
+      # config: nixpkgs config for the held sets; default: carried over from yours.
       lib.mkHolds =
         {
           holds,
@@ -49,12 +44,9 @@
             root = if builtins.isAttrs holds then null else dirOf holds;
           };
 
-          # The nixpkgs NixOS tests of the held packages, from a package set
-          # with the holds applied: an entry's `tests`, by default
-          # `nixosTests.<name>` if there is one. The NixOS module comes from
-          # the current nixpkgs, the package from its hold, and a module that
-          # expects a newer package only fails at runtime. Run these with
-          # your own overlays on top, since that is the package you deploy.
+          # NixOS tests of the held packages (`tests`, default nixosTests.<name>):
+          # the module is from the current nixpkgs and the package from its hold,
+          # so a mismatch only shows at runtime. Run them with your own overlays.
           nixosTests =
             pkgs:
             let
@@ -62,12 +54,9 @@
             in
             lib.genAttrs (lib.unique (lib.concatMap testsOf (heldIn pkgs))) (test: pkgs.nixosTests.${test});
 
-          # What ends each hold: its `releaseWhen` (default: the package
-          # itself), from a package set *without* the holds but with the
-          # consumer's own overlays. A hold can go once its release check
-          # builds from the newest nixpkgs. Each check carries its hold's
-          # entry as `nixHolds`, so the release tools read the holds this
-          # flake actually uses.
+          # Per hold, its `releaseWhen` (default: the package) from a set without
+          # the holds; the hold can go once this builds on the newest nixpkgs.
+          # `nixHolds` carries the entry, so the tools read the holds in use.
           releaseChecks =
             pkgs:
             lib.genAttrs (heldIn pkgs) (
