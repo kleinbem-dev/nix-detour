@@ -444,33 +444,53 @@ in
         ];
       }
       ''
-        set -euo pipefail
-        nix-detour pr add mesh --pr 571722 --repo someone/nixpkgs --attrs mesh-llm,skippy \
-          --scope skippy-runtime --module mesh-llm=nixos/modules/services/misc/mesh-llm.nix
-        test "$(jq -c .mesh nixpkgs-prs.json)" = '{"pr":571722,"owner":"someone","repo":"nixpkgs","rev":"","narHash":"","attrs":["mesh-llm","skippy"],"scope":["skippy-runtime"],"modules":{"mesh-llm":"nixos/modules/services/misc/mesh-llm.nix"}}'
-        nix-detour pr add berd --pr 2 --repo someone/nixpkgs --attrs berd
-        test "$(jq -r 'keys | join(",")' nixpkgs-prs.json)" = berd,mesh
-        test "$(jq -c .berd nixpkgs-prs.json)" = '{"pr":2,"owner":"someone","repo":"nixpkgs","rev":"","narHash":"","attrs":["berd"]}'
-        nix-detour pr list | grep -q '^mesh  *#571722  *not pinned  *mesh-llm,skippy$'
-        nix-detour pr add custom --pr 3 --repo someone/nixpkgs --attrs custom-pkg \
-          --path custom-pkg=pkgs/development/custom-pkg/default.nix
-        test "$(jq -c .custom.paths nixpkgs-prs.json)" = '{"custom-pkg":"pkgs/development/custom-pkg/default.nix"}'
-        if nix-detour pr add bad --pr 4 --repo a/b --attrs bad --path bad 2>/dev/null; then echo "a path without = should fail" >&2; exit 1; fi
-        if nix-detour pr add bad --pr 4 --repo a/b --attrs pkg --path other=path 2>/dev/null; then echo "a path for an unexported package should fail" >&2; exit 1; fi
-        nix-detour pr remove custom
-        if nix-detour pr pin berd abc 2>/dev/null; then echo "pin with a short sha should fail" >&2; exit 1; fi
-        if nix-detour pr pin nope 0000000000000000000000000000000000000000 2>/dev/null; then echo "pin of a missing entry should fail" >&2; exit 1; fi
-        if nix-detour pr add x --pr 3 --attrs x 2>/dev/null; then echo "add without --repo should fail" >&2; exit 1; fi
-        if nix-detour pr add x --pr 3 --repo a/b --attrs x --module bad 2>/dev/null; then echo "a module without a path should fail" >&2; exit 1; fi
-        if nix-detour pr add berd --pr 2 --repo other/nixpkgs --attrs berd 2>/dev/null; then echo "adding an existing entry should fail" >&2; exit 1; fi
-        test "$(jq -r .berd.owner nixpkgs-prs.json)" = someone
-        # A --rev that can't be pinned adds nothing.
-        if nix-detour pr add x --pr 3 --repo a/b --attrs x --rev abc 2>/dev/null; then echo "add with a short --rev should fail" >&2; exit 1; fi
-        test "$(jq -r 'has("x")' nixpkgs-prs.json)" = false
-        nix-detour pr remove berd
-        test "$(jq -r 'keys | join(",")' nixpkgs-prs.json)" = mesh
-        if nix-detour pr remove berd 2>/dev/null; then echo "removing a missing entry should fail" >&2; exit 1; fi
-        touch $out
+                set -euo pipefail
+                nix-detour pr add mesh --pr 571722 --repo someone/nixpkgs --attrs mesh-llm,skippy \
+                  --scope skippy-runtime --module mesh-llm=nixos/modules/services/misc/mesh-llm.nix
+                test "$(jq -c .mesh nixpkgs-prs.json)" = '{"pr":571722,"owner":"someone","repo":"nixpkgs","rev":"","narHash":"","attrs":["mesh-llm","skippy"],"scope":["skippy-runtime"],"modules":{"mesh-llm":"nixos/modules/services/misc/mesh-llm.nix"}}'
+                nix-detour pr add berd --pr 2 --repo someone/nixpkgs --attrs berd
+                test "$(jq -r 'keys | join(",")' nixpkgs-prs.json)" = berd,mesh
+                test "$(jq -c .berd nixpkgs-prs.json)" = '{"pr":2,"owner":"someone","repo":"nixpkgs","rev":"","narHash":"","attrs":["berd"]}'
+                nix-detour pr list | grep -q '^mesh  *#571722  *not pinned  *mesh-llm,skippy$'
+                nix-detour pr add custom --pr 3 --repo someone/nixpkgs --attrs custom-pkg \
+                  --path custom-pkg=pkgs/development/custom-pkg/default.nix
+                test "$(jq -c .custom.paths nixpkgs-prs.json)" = '{"custom-pkg":"pkgs/development/custom-pkg/default.nix"}'
+                if nix-detour pr add bad --pr 4 --repo a/b --attrs bad --path bad 2>/dev/null; then echo "a path without = should fail" >&2; exit 1; fi
+                if nix-detour pr add bad --pr 4 --repo a/b --attrs pkg --path other=path 2>/dev/null; then echo "a path for an unexported package should fail" >&2; exit 1; fi
+                nix-detour pr remove custom
+                if nix-detour pr pin berd abc 2>/dev/null; then echo "pin with a short sha should fail" >&2; exit 1; fi
+                if nix-detour pr pin nope 0000000000000000000000000000000000000000 2>/dev/null; then echo "pin of a missing entry should fail" >&2; exit 1; fi
+                if nix-detour pr add x --pr 3 --attrs x 2>/dev/null; then echo "add without --repo should fail" >&2; exit 1; fi
+                if nix-detour pr add x --pr 3 --repo a/b --attrs x --module bad 2>/dev/null; then echo "a module without a path should fail" >&2; exit 1; fi
+                if nix-detour pr add berd --pr 2 --repo other/nixpkgs --attrs berd 2>/dev/null; then echo "adding an existing entry should fail" >&2; exit 1; fi
+                test "$(jq -r .berd.owner nixpkgs-prs.json)" = someone
+                # A --rev that can't be pinned adds nothing.
+                if nix-detour pr add x --pr 3 --repo a/b --attrs x --rev abc 2>/dev/null; then echo "add with a short --rev should fail" >&2; exit 1; fi
+                test "$(jq -r 'has("x")' nixpkgs-prs.json)" = false
+                nix-detour pr remove berd
+                test "$(jq -r 'keys | join(",")' nixpkgs-prs.json)" = mesh
+                if nix-detour pr remove berd 2>/dev/null; then echo "removing a missing entry should fail" >&2; exit 1; fi
+
+                # PR check command with mock gh
+                cat << 'EOF' > gh
+        #!/bin/sh
+        if [ "$2" = "repos/NixOS/nixpkgs/pulls/571722" ]; then
+          echo '{"state":"open","draft":false,"merged":false,"title":"mesh-llm"}'
+        elif [ "$2" = "repos/NixOS/nixpkgs/pulls/100" ]; then
+          echo '{"state":"closed","draft":false,"merged":true,"merge_commit_sha":"abc12345","title":"merged-landing"}'
+        elif [ "$2" = "repos/NixOS/nixpkgs/compare/nixos-unstable...abc12345" ]; then
+          echo '{"status":"behind"}'
+        fi
+        EOF
+                chmod +x gh
+                test "$(PATH=".:$PATH" nix-detour pr check --json mesh | jq -r .mesh.status)" = "open"
+                nix-detour pr add landed --pr 100 --repo someone/nixpkgs --attrs landed-pkg
+                test "$(PATH=".:$PATH" nix-detour pr check --json landed | jq -r .landed.status)" = "in-channel"
+                test "$(PATH=".:$PATH" nix-detour pr check --json landed | jq -r .landed.inChannel)" = "true"
+                PATH=".:$PATH" nix-detour check > check_out.txt
+                grep -q '=== PRs ===' check_out.txt
+                grep -q 'landed' check_out.txt
+                touch $out
       '';
 
   # The fix's patch applies and the package builds with it.

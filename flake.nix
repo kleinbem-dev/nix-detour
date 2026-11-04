@@ -115,6 +115,7 @@
               name = "nix-detour-pr";
               runtimeInputs = [
                 pkgs.coreutils
+                pkgs.curl
                 pkgs.jq
               ];
               text = builtins.readFile ./scripts/prs.sh;

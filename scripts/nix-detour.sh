@@ -40,6 +40,7 @@ die() {
   exit 1
 }
 
+all_check=false
 fix=false
 case "${1:-}" in
   hold) shift ;;
@@ -51,14 +52,19 @@ case "${1:-}" in
     shift
     exec @prs@ "$@"
     ;;
-  add | remove | list | check) die "holds are under hold now: nix-detour hold $1 ..." ;;
+  check)
+    shift
+    all_check=true
+    ;;
+  add | remove | list) die "holds are under hold now: nix-detour hold $1 ..." ;;
   -h | --help | "")
     cat <<'EOF'
-Usage: nix-detour <hold|pr> <command> [options]
+Usage: nix-detour <hold|fix|pr|check> [command] [options]
 
   hold ...   packages held back on an older nixpkgs (nix-detour hold --help)
   fix ...    the current package with your patch or override (nix-detour hold --help)
   pr ...     packages from open nixpkgs PRs (nix-detour pr --help)
+  check      check both holds and PRs for upstream availability
 EOF
     [[ -n "${1:-}" ]] || exit 1
     exit 0
@@ -95,6 +101,26 @@ while (($#)); do
     *) args+=("$1"); shift ;;
   esac
 done
+
+if $all_check; then
+  ran=false
+  if [[ -f $file ]]; then
+    echo "=== Holds ==="
+    @releaseCheck@ "$flake" "$channel" || true
+    ran=true
+  fi
+  if [[ -f nixpkgs-prs.json ]]; then
+    if $ran; then echo ""; fi
+    echo "=== PRs ==="
+    @prs@ check --channel "$channel" || true
+    ran=true
+  fi
+  if ! $ran; then
+    echo "nix-detour: neither $file nor nixpkgs-prs.json found"
+  fi
+  exit 0
+fi
+
 ((${#args[@]})) || { usage >&2; exit 1; }
 command="${args[0]}"
 

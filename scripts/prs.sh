@@ -25,6 +25,9 @@ Usage: nix-detour pr <command> [options]
   merged [--flake REF]
       Say which entries nixpkgs has in the same or a newer version: they
       can go.
+  check [NAME] [--channel REF] [--upstream OWNER/REPO] [--json]
+      Check upstream GitHub PR status (draft, open, merged) and whether
+      merged PRs have reached the upstream channel (default: nixos-unstable).
 
 Options for every command:
   --file PATH    the PRs file (default: nixpkgs-prs.json)
@@ -37,6 +40,7 @@ die() {
 }
 
 file=nixpkgs-prs.json flake=. pr="" repo="" attrs="" rev="" scope=""
+channel=nixos-unstable upstream=NixOS/nixpkgs as_json=false
 modules=() paths=()
 args=()
 need() {
@@ -46,6 +50,9 @@ while (($#)); do
   case "$1" in
     --file) need "$@"; file="$2"; shift 2 ;;
     --flake) need "$@"; flake="$2"; shift 2 ;;
+    --channel) need "$@"; channel="$2"; shift 2 ;;
+    --upstream) need "$@"; upstream="$2"; shift 2 ;;
+    --json) as_json=true; shift ;;
     --pr) need "$@"; pr="$2"; shift 2 ;;
     --repo) need "$@"; repo="$2"; shift 2 ;;
     --attrs) need "$@"; attrs="$2"; shift 2 ;;
@@ -165,6 +172,135 @@ case "$command" in
     merged=$(nix eval --json "$flake#nixpkgsPrs.$(system)" --apply 'builtins.mapAttrs (_: c: c.merged)') \
       || die "cannot evaluate $flake#nixpkgsPrs"
     jq -r 'to_entries[] | "\(if .value then "merged" else "open" end) \(.key)"' <<<"$merged"
+    ;;
+  check)
+    channel_branch="$channel"
+    if [[ $channel_branch == github:*/*/* ]]; then
+      channel_branch="${channel_branch#github:*/*/}"
+    fi
+    target_names=()
+    if [[ -n $name ]]; then
+      need_entry
+      target_names=("$name")
+    else
+      if [[ ! -f $file ]]; then
+        $as_json && echo "{}" || echo "no $file found"
+        exit 0
+      fi
+      raw_keys=$(entries | jq -r 'keys[]') || exit 1
+      mapfile -t target_names <<<"$raw_keys"
+    fi
+
+    if ((${#target_names[@]} == 0)); then
+      $as_json && echo "{}" || echo "no entries in $file"
+      exit 0
+    fi
+
+    is_tty=false
+    if [[ -t 1 ]] && ! $as_json; then
+      is_tty=true
+    fi
+
+    json_results='{}'
+    if ! $as_json; then
+      printf '%-20s %-8s %-16s %s\n' "NAME" "PR" "STATUS" "DETAILS"
+    fi
+
+    for n in "${target_names[@]}"; do
+      pr_num=$(entries | jq -r --arg n "$n" '.[$n].pr // empty')
+      if [[ -z $pr_num ]]; then
+        continue
+      fi
+
+      pr_json=""
+      if command -v gh >/dev/null 2>&1; then
+        pr_json=$(gh api "repos/$upstream/pulls/$pr_num" --jq '{state: .state, draft: .draft, merged: .merged, merge_commit_sha: .merge_commit_sha, title: .title, html_url: .html_url}' 2>/dev/null || true)
+      fi
+      if [[ -z $pr_json || $pr_json == "null" ]]; then
+        auth_hdr=()
+        if [[ -n "${GITHUB_TOKEN:-}" ]]; then
+          auth_hdr=(-H "Authorization: Bearer $GITHUB_TOKEN")
+        fi
+        pr_json=$(curl -s -f "${auth_hdr[@]}" -H "Accept: application/vnd.github+json" "https://api.github.com/repos/$upstream/pulls/$pr_num" 2>/dev/null | jq '{state: .state, draft: .draft, merged: .merged, merge_commit_sha: .merge_commit_sha, title: .title, html_url: .html_url}' 2>/dev/null || true)
+      fi
+
+      status="unknown"
+      details="GitHub API unavailable"
+      state="unknown"
+      draft="false"
+      merged="false"
+      in_channel="false"
+      title=""
+      html_url="https://github.com/$upstream/pull/$pr_num"
+
+      if [[ -n $pr_json && $pr_json != "null" ]]; then
+        state=$(jq -r '.state // "unknown"' <<<"$pr_json")
+        draft=$(jq -r '.draft // false' <<<"$pr_json")
+        merged=$(jq -r '.merged // false' <<<"$pr_json")
+        merge_commit=$(jq -r '.merge_commit_sha // empty' <<<"$pr_json")
+        title=$(jq -r '.title // ""' <<<"$pr_json")
+        html_url=$(jq -r '.html_url // ""' <<<"$pr_json")
+
+        if [[ $merged == "true" ]]; then
+          comp_json=""
+          if [[ -n $merge_commit ]]; then
+            if command -v gh >/dev/null 2>&1; then
+              comp_json=$(gh api "repos/$upstream/compare/$channel_branch...$merge_commit" --jq '{status: .status}' 2>/dev/null || true)
+            fi
+            if [[ -z $comp_json || $comp_json == "null" ]]; then
+              auth_hdr=()
+              if [[ -n "${GITHUB_TOKEN:-}" ]]; then
+                auth_hdr=(-H "Authorization: Bearer $GITHUB_TOKEN")
+              fi
+              comp_json=$(curl -s -f "${auth_hdr[@]}" -H "Accept: application/vnd.github+json" "https://api.github.com/repos/$upstream/compare/$channel_branch...$merge_commit" 2>/dev/null | jq '{status: .status}' 2>/dev/null || true)
+            fi
+          fi
+          comp_status=$(jq -r '.status // empty' <<<"$comp_json")
+          if [[ $comp_status == "behind" || $comp_status == "identical" ]]; then
+            status="in-channel"
+            in_channel="true"
+            details="landed in $channel_branch (ready to release)"
+          else
+            status="merged"
+            details="merged upstream (waiting for $channel_branch)"
+          fi
+        elif [[ $draft == "true" ]]; then
+          status="draft"
+          details="draft PR"
+        elif [[ $state == "closed" ]]; then
+          status="closed"
+          details="closed without merge"
+        else
+          status="open"
+          details="open upstream"
+        fi
+      fi
+
+      if $as_json; then
+        json_results=$(jq --arg n "$n" --argjson pr "$pr_num" \
+          --arg status "$status" --arg state "$state" --argjson draft "$draft" \
+          --argjson merged "$merged" --argjson inChannel "$in_channel" \
+          --arg details "$details" --arg title "$title" --arg url "$html_url" \
+          '.[$n] = {pr: $pr, status: $status, state: $state, draft: $draft, merged: $merged, inChannel: $inChannel, details: $details, title: $title, url: $url}' \
+          <<<"$json_results")
+      else
+        status_display="$status"
+        if $is_tty; then
+          case "$status" in
+            in-channel) status_display=$'\e[1;32min-channel\e[0m' ;;
+            merged) status_display=$'\e[1;35mmerged\e[0m' ;;
+            open) status_display=$'\e[1;34mopen\e[0m' ;;
+            draft) status_display=$'\e[1;33mdraft\e[0m' ;;
+            closed) status_display=$'\e[1;31mclosed\e[0m' ;;
+          esac
+        fi
+        printf '%-20s %-8s %-16s %s\n' "$n" "#$pr_num" "$status_display" "$details"
+      fi
+    done
+
+    if $as_json; then
+      echo "$json_results" | jq .
+    fi
     ;;
   *) die "unknown command $command (see --help)" ;;
 esac
