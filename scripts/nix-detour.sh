@@ -41,6 +41,8 @@ die() {
 }
 
 all_check=false
+all_list=false
+all_release=false
 fix=false
 case "${1:-}" in
   hold) shift ;;
@@ -56,15 +58,26 @@ case "${1:-}" in
     shift
     all_check=true
     ;;
-  add | remove | list) die "holds are under hold now: nix-detour hold $1 ..." ;;
+  list)
+    shift
+    all_list=true
+    ;;
+  release | remove)
+    shift
+    all_release=true
+    ;;
+  add) die "add requires domain: nix-detour hold add ... or nix-detour pr add ..." ;;
   -h | --help | "")
     cat <<'EOF'
-Usage: nix-detour <hold|fix|pr|check> [command] [options]
+Usage: nix-detour <command> [options]
 
-  hold ...   packages held back on an older nixpkgs (nix-detour hold --help)
-  fix ...    the current package with your patch or override (nix-detour hold --help)
-  pr ...     packages from open nixpkgs PRs (nix-detour pr --help)
-  check      check both holds and PRs for upstream availability
+Commands:
+  hold ...     manage package holds (nix-detour hold --help)
+  fix ...      manage package fixes with patches/overrides (nix-detour fix --help)
+  pr ...       manage packages from open nixpkgs PRs (nix-detour pr --help)
+  list         list all active holds, fixes, and PR detours
+  check        check upstream status for both holds and PRs
+  release NAME release and retire a hold, fix, or PR detour
 EOF
     [[ -n "${1:-}" ]] || exit 1
     exit 0
@@ -102,28 +115,6 @@ while (($#)); do
   esac
 done
 
-if $all_check; then
-  ran=false
-  if [[ -f $file ]]; then
-    echo "=== Holds ==="
-    @releaseCheck@ "$flake" "$channel" || true
-    ran=true
-  fi
-  if [[ -f nixpkgs-prs.json ]]; then
-    if $ran; then echo ""; fi
-    echo "=== PRs ==="
-    @prs@ check --channel "$channel" || true
-    ran=true
-  fi
-  if ! $ran; then
-    echo "nix-detour: neither $file nor nixpkgs-prs.json found"
-  fi
-  exit 0
-fi
-
-((${#args[@]})) || { usage >&2; exit 1; }
-command="${args[0]}"
-
 holds() {
   if [[ -e $file ]]; then
     jq . "$file" || die "$file is not valid JSON"
@@ -140,6 +131,77 @@ write_holds() {
     || die "cannot update $file (is it valid JSON?)"
   printf '%s\n' "$new" >"$file"
 }
+
+if $all_check; then
+  ran=false
+  failed=false
+  if [[ -f $file ]]; then
+    echo "=== Holds ==="
+    @releaseCheck@ "$flake" "$channel" || failed=true
+    ran=true
+  fi
+  if [[ -f nixpkgs-prs.json ]]; then
+    if $ran; then echo ""; fi
+    echo "=== PRs ==="
+    @prs@ check --channel "$channel" || failed=true
+    ran=true
+  fi
+  if ! $ran; then
+    echo "nix-detour: neither $file nor nixpkgs-prs.json found"
+    exit 1
+  fi
+  $failed && exit 1
+  exit 0
+fi
+
+if $all_list; then
+  has_output=false
+  if [[ -f $file ]] && (($(jq 'keys | length' "$file" 2>/dev/null || echo 0) > 0)); then
+    echo "=== Holds & Fixes ==="
+    today=$(date -u +%s)
+    holds | jq -r 'to_entries[] | [.key, ((.value.from | if type == "string" then . else .rev[0:12] end)
+        + (if (.value.patches // []) != [] or .value.override then "+fix" else "" end)),
+      (.value.since // ""), (.value.releaseWhen // "")] | join("\u001f")' |
+      while IFS=$'\x1f' read -r n s si rw; do
+        age=""
+        [[ -z $si ]] || age="$si ($(((today - $(date -u -d "$si" +%s)) / 86400)) days)"
+        printf '%-24s %-14s %s%s\n' "$n" "$s" "${age:-no date}" "${rw:+  until $rw builds}" || true
+      done
+    has_output=true
+  fi
+  if [[ -f nixpkgs-prs.json ]] && (($(jq 'keys | length' nixpkgs-prs.json 2>/dev/null || echo 0) > 0)); then
+    $has_output && echo ""
+    echo "=== PRs ==="
+    @prs@ list
+    has_output=true
+  fi
+  if ! $has_output; then
+    echo "no holds or PRs found"
+  fi
+  exit 0
+fi
+
+if $all_release; then
+  name="${args[0]:-}"
+  [[ -n $name ]] || die "release needs package name"
+  found=false
+  if [[ -f $file ]] && jq -e --arg n "$name" 'has($n)' "$file" >/dev/null 2>&1; then
+    holds | jq --arg n "$name" 'del(.[$n])' | write_holds
+    echo "released hold $name"
+    found=true
+  fi
+  if [[ -f nixpkgs-prs.json ]] && jq -e --arg n "$name" 'has($n)' nixpkgs-prs.json >/dev/null 2>&1; then
+    @prs@ remove "$name"
+    found=true
+  fi
+  if ! $found; then
+    die "no hold or PR entry '$name' found"
+  fi
+  exit 0
+fi
+
+((${#args[@]})) || { usage >&2; exit 1; }
+command="${args[0]}"
 
 # Prints {rev, narHash} of $input in the lock JSON on stdin.
 locked_nixpkgs() {

@@ -140,6 +140,7 @@
           # Hashes come from package-lock.json, so Dependabot bumps need no hash update.
           npmDeps = pkgs.importNpmLock { npmRoot = ./web; };
           npmConfigHook = pkgs.importNpmLock.npmConfigHook;
+          npmFlags = [ "--legacy-peer-deps" ];
           installPhase = ''
             runHook preInstall
             cp -r dist $out
