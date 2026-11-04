@@ -2,7 +2,7 @@
   import { onMount } from 'svelte';
   import { initialHolds, initialPrs } from './defaultData';
   import { parseHolds, parsePrs } from './utils';
-  import type { HoldEntry, PrEntry, DetourItem, DetourKind } from './types';
+  import type { HoldEntry, PrEntry, DetourItem, DetourKind, DetourFilter, PrStatusInfo } from './types';
   import Header from './components/Header.svelte';
   import StatsBar from './components/StatsBar.svelte';
   import DetourCard from './components/DetourCard.svelte';
@@ -15,9 +15,10 @@
   let rawPrs = $state<Record<string, PrEntry>>(initialPrs);
   let sourceName = $state('kleinbem/nix-detour-fleet (sample)');
   let isLocalApi = $state(false);
+  let prStatuses = $state<Record<number, PrStatusInfo>>({});
 
   let searchQuery = $state('');
-  let currentFilter = $state<DetourKind | 'all' | 'stale'>('all');
+  let currentFilter = $state<DetourFilter>('all');
   let selectedItem = $state<DetourItem | null>(null);
   let showImportModal = $state(false);
   let showNewDetourModal = $state(false);
@@ -44,6 +45,9 @@
   let fixesCount = $derived(allItems.filter(i => i.kind === 'fix').length);
   let prsCount = $derived(allItems.filter(i => i.kind === 'pr').length);
   let staleCount = $derived(allItems.filter(i => i.ageDays > 14).length);
+  let readyCount = $derived(
+    allItems.filter(i => i.kind === 'pr' && i.prNumber && prStatuses[i.prNumber]?.inChannel).length
+  );
 
   // Filtered items
   let filteredItems = $derived.by(() => {
@@ -52,6 +56,10 @@
       // Filter tab
       if (currentFilter === 'stale') {
         if (item.ageDays <= 14) return false;
+      } else if (currentFilter === 'ready') {
+        if (item.kind !== 'pr' || !item.prNumber) return false;
+        const status = prStatuses[item.prNumber];
+        if (status && !status.inChannel) return false;
       } else if (currentFilter !== 'all') {
         if (item.kind !== currentFilter) return false;
       }
@@ -61,8 +69,10 @@
       return (
         item.name.toLowerCase().includes(q) ||
         item.reason.toLowerCase().includes(q) ||
+        (item.sourceLabel && item.sourceLabel.toLowerCase().includes(q)) ||
         (item.releaseWhen && item.releaseWhen.toLowerCase().includes(q)) ||
         (item.untilVersion && item.untilVersion.toLowerCase().includes(q)) ||
+        (item.untilChannel && item.untilChannel.toLowerCase().includes(q)) ||
         (item.attrs && item.attrs.some(a => a.toLowerCase().includes(q))) ||
         (item.prNumber && String(item.prNumber).includes(q))
       );
@@ -80,7 +90,11 @@
         if (holdsCount > 0 || prsCount > 0) {
           rawHolds = data.holds || {};
           rawPrs = data.prs || {};
-          sourceName = 'Local Repository (live sync)';
+          if (data.source?.holdsDiscovered || data.source?.prsDiscovered) {
+            sourceName = 'Workspace Fleet (discovered)';
+          } else {
+            sourceName = 'Local Repository (live sync)';
+          }
         } else {
           // Local repo has no detours yet: show sample fleet preview so UI is populated
           rawHolds = initialHolds;
@@ -89,6 +103,35 @@
         }
         if (showFeedback) {
           showToast('Data refreshed from disk');
+        }
+      }
+
+      try {
+        const cachedRes = await fetch('/api/pr-statuses');
+        if (cachedRes.ok) {
+          const cached = await cachedRes.json();
+          const byPr: Record<number, PrStatusInfo> = {};
+          for (const val of Object.values(cached)) {
+            const entry = val as PrStatusInfo;
+            if (entry && entry.pr) {
+              byPr[entry.pr] = entry;
+            }
+          }
+          prStatuses = { ...prStatuses, ...byPr };
+        }
+      } catch {}
+
+      // Eagerly fetch statuses for all known PR detours
+      for (const p of Object.values(rawPrs)) {
+        if (p.pr && !prStatuses[p.pr]) {
+          fetch(`/api/pr-status?pr=${p.pr}`)
+            .then(r => r.ok ? r.json() : null)
+            .then(data => {
+              if (data && data.pr) {
+                prStatuses = { ...prStatuses, [data.pr]: data };
+              }
+            })
+            .catch(() => {});
         }
       }
     } catch {
@@ -208,7 +251,7 @@
         {#if isLocalApi}
           <div class="flex items-center gap-1.5 font-mono text-xs text-emerald-400 bg-emerald-950/40 border border-emerald-800/60 px-2.5 py-1 rounded-xl">
             <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
-            <span>Live Sync (Disk)</span>
+            <span>Live Sync</span>
           </div>
         {/if}
         <div class="flex items-center gap-2 font-mono text-xs text-stone-400 bg-stone-900/90 px-3 py-1.5 rounded-xl border border-stone-800">
@@ -225,6 +268,7 @@
       {fixesCount}
       {prsCount}
       {staleCount}
+      {readyCount}
       {currentFilter}
       onFilterChange={(f) => { currentFilter = f; }}
     />
@@ -274,6 +318,10 @@
             {item}
             onSelect={(selected) => { selectedItem = selected; }}
             onRelease={handleReleaseDetour}
+            onTagClick={(tag) => { searchQuery = tag; }}
+            onStatusUpdate={(prNum, status) => {
+              prStatuses = { ...prStatuses, [prNum]: status };
+            }}
           />
         {/each}
       </div>

@@ -66,6 +66,10 @@ case "${1:-}" in
     shift
     all_release=true
     ;;
+  web)
+    shift
+    exec @webServer@ "$@"
+    ;;
   add) die "add requires domain: nix-detour hold add ... or nix-detour pr add ..." ;;
   -h | --help | "")
     cat <<'EOF'
@@ -78,6 +82,7 @@ Commands:
   list         list all active holds, fixes, and PR detours
   check        check upstream status for both holds and PRs
   release NAME release and retire a hold, fix, or PR detour
+  web          launch the interactive web dashboard (nix-detour web --help)
 EOF
     [[ -n "${1:-}" ]] || exit 1
     exit 0

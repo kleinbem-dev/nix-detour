@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import argparse
 import http.server
 import json
 import os
@@ -8,11 +9,51 @@ import time
 import urllib.parse
 import urllib.request
 
-PORT = int(sys.argv[1]) if len(sys.argv) > 1 and sys.argv[1].isdigit() else 8080
-STATIC_DIR = sys.argv[2] if len(sys.argv) > 2 else os.path.join(os.path.dirname(__file__), "dist")
+parser = argparse.ArgumentParser(description="nix-detour web dashboard server")
+parser.add_argument("port_pos", nargs="?", type=str, help="Optional port (positional)")
+parser.add_argument("static_dir_pos", nargs="?", type=str, help="Optional static dir (positional)")
+parser.add_argument("--port", "-p", type=int, default=8080, help="Port to listen on (default: 8080)")
+parser.add_argument("--static-dir", type=str, default="", help="Directory with built web static assets")
+parser.add_argument("--data-dir", type=str, default="", help="Directory containing held-packages.json and nixpkgs-prs.json")
+parser.add_argument("--holds", type=str, default="", help="Path to held-packages.json")
+parser.add_argument("--prs", type=str, default="", help="Path to nixpkgs-prs.json")
+
+args, unknown = parser.parse_known_args()
+
+# Handle positional arguments if passed
+PORT = int(args.port_pos) if args.port_pos and args.port_pos.isdigit() else args.port
+STATIC_DIR = args.static_dir_pos if args.static_dir_pos else (args.static_dir or os.path.join(os.path.dirname(__file__), "dist"))
 
 PR_CACHE = {}
 CACHE_TTL = 60
+
+
+def resolve_file(explicit_path, filename):
+    if explicit_path:
+        return os.path.abspath(explicit_path), False
+
+    if args.data_dir:
+        cand = os.path.join(args.data_dir, filename)
+        return os.path.abspath(cand), False
+
+    cwd = os.getcwd()
+    if os.path.exists(os.path.join(cwd, filename)):
+        return os.path.abspath(os.path.join(cwd, filename)), False
+
+    # Auto-discovery in sibling repos across the workspace
+    fleet_candidates = [
+        os.path.join(cwd, "..", filename),
+        os.path.join(cwd, "..", "nix-packages", filename),
+        os.path.join(cwd, "..", "nix-detour-fleet", filename),
+        os.path.join(cwd, "..", "..", filename),
+        os.path.join(cwd, "..", "..", "nix-packages", filename),
+        os.path.join(cwd, "..", "..", "nix-detour-fleet", filename),
+    ]
+    for c in fleet_candidates:
+        if os.path.exists(c):
+            return os.path.abspath(c), True
+
+    return os.path.abspath(os.path.join(cwd, filename)), False
 
 
 def fetch_pr_status(pr_number, upstream="NixOS/nixpkgs", channel="nixos-unstable"):
@@ -146,21 +187,32 @@ class DetourHandler(http.server.SimpleHTTPRequestHandler):
     def do_GET(self):
         parsed_url = urllib.parse.urlparse(self.path)
         if parsed_url.path == "/api/data":
+            holds_file, holds_disc = resolve_file(args.holds, "held-packages.json")
+            prs_file, prs_disc = resolve_file(args.prs, "nixpkgs-prs.json")
+
             holds = {}
             prs = {}
-            if os.path.exists("held-packages.json"):
+            if os.path.exists(holds_file):
                 try:
-                    with open("held-packages.json", "r") as f:
+                    with open(holds_file, "r") as f:
                         holds = json.load(f)
                 except Exception:
                     pass
-            if os.path.exists("nixpkgs-prs.json"):
+            if os.path.exists(prs_file):
                 try:
-                    with open("nixpkgs-prs.json", "r") as f:
+                    with open(prs_file, "r") as f:
                         prs = json.load(f)
                 except Exception:
                     pass
-            data = json.dumps({"holds": holds, "prs": prs}).encode("utf-8")
+
+            source_info = {
+                "holdsFile": holds_file if os.path.exists(holds_file) else None,
+                "prsFile": prs_file if os.path.exists(prs_file) else None,
+                "holdsDiscovered": holds_disc,
+                "prsDiscovered": prs_disc,
+            }
+
+            data = json.dumps({"holds": holds, "prs": prs, "source": source_info}).encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(data)))
@@ -187,6 +239,16 @@ class DetourHandler(http.server.SimpleHTTPRequestHandler):
             self.wfile.write(data)
             return
 
+        if parsed_url.path == "/api/pr-statuses":
+            cached = {k: v[1] for k, v in PR_CACHE.items()}
+            data = json.dumps(cached).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+            return
+
         super().do_GET()
 
     def do_POST(self):
@@ -206,7 +268,7 @@ class DetourHandler(http.server.SimpleHTTPRequestHandler):
                 self.end_headers()
                 return
 
-            target = "nixpkgs-prs.json" if kind == "pr" else "held-packages.json"
+            target, _ = resolve_file(args.prs if kind == "pr" else args.holds, "nixpkgs-prs.json" if kind == "pr" else "held-packages.json")
             cur = {}
             if os.path.exists(target):
                 try:
@@ -235,7 +297,7 @@ class DetourHandler(http.server.SimpleHTTPRequestHandler):
                 self.end_headers()
                 return
 
-            target = "nixpkgs-prs.json" if kind == "pr" else "held-packages.json"
+            target, _ = resolve_file(args.prs if kind == "pr" else args.holds, "nixpkgs-prs.json" if kind == "pr" else "held-packages.json")
             if os.path.exists(target):
                 try:
                     with open(target, "r") as f:

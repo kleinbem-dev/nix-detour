@@ -502,6 +502,8 @@ in
                 grep -q '=== PRs ===' list_prs.txt
                 nix-detour release landed
                 test "$(jq -r 'has("landed")' nixpkgs-prs.json)" = false
+                nix-detour web --help > web_help.txt
+                grep -q 'nix-detour web' web_help.txt
                 touch $out
       '';
 
