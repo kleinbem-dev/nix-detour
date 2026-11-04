@@ -6,9 +6,10 @@
     onOpenImport: () => void;
     onOpenNewDetour?: () => void;
     onExportJson?: () => void;
+    onRefresh?: () => void;
   }
 
-  let { searchQuery, sourceName, onSearchChange, onOpenImport, onOpenNewDetour, onExportJson }: Props = $props();
+  let { searchQuery, sourceName, onSearchChange, onOpenImport, onOpenNewDetour, onExportJson, onRefresh }: Props = $props();
 </script>
 
 <header class="border-b border-stone-800 bg-stone-950/80 backdrop-blur-md sticky top-0 z-40">
@@ -67,6 +68,20 @@
         </svg>
         <span>Import</span>
       </button>
+
+      {#if onRefresh}
+        <button
+          type="button"
+          onclick={onRefresh}
+          title="Reload data from disk"
+          class="inline-flex items-center gap-1.5 px-3 py-1.5 bg-stone-900 hover:bg-stone-800 border border-stone-700/80 rounded-xl text-xs font-medium text-stone-200 transition cursor-pointer shrink-0"
+        >
+          <svg class="w-3.5 h-3.5 text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+          </svg>
+          <span>Refresh</span>
+        </button>
+      {/if}
 
       {#if onExportJson}
         <button

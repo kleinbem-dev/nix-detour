@@ -21,6 +21,16 @@
   let selectedItem = $state<DetourItem | null>(null);
   let showImportModal = $state(false);
   let showNewDetourModal = $state(false);
+  let toastMessage = $state<string | null>(null);
+  let toastTimeout: ReturnType<typeof setTimeout> | null = null;
+
+  function showToast(msg: string) {
+    if (toastTimeout) clearTimeout(toastTimeout);
+    toastMessage = msg;
+    toastTimeout = setTimeout(() => {
+      toastMessage = null;
+    }, 3000);
+  }
 
   // Derived detours list
   let allItems = $derived.by(() => {
@@ -59,7 +69,7 @@
     });
   });
 
-  onMount(async () => {
+  async function reloadLocalData(showFeedback = false) {
     try {
       const res = await fetch('/api/data');
       if (res.ok) {
@@ -77,10 +87,20 @@
           rawPrs = initialPrs;
           sourceName = 'Local Repository (sample preview)';
         }
+        if (showFeedback) {
+          showToast('Data refreshed from disk');
+        }
       }
     } catch {
       // Standalone mode without backend API
+      if (showFeedback) {
+        showToast('Running in standalone preview mode');
+      }
     }
+  }
+
+  onMount(() => {
+    reloadLocalData(false);
   });
 
   async function handleCreateDetour(name: string, kind: DetourKind, entry: HoldEntry | PrEntry) {
@@ -89,6 +109,7 @@
     } else {
       rawHolds = { ...rawHolds, [name]: entry as HoldEntry };
     }
+    showToast(`Added ${kind === 'pr' ? 'PR' : 'hold'} detour '${name}'`);
 
     if (isLocalApi) {
       try {
@@ -113,6 +134,7 @@
       delete next[item.name];
       rawHolds = next;
     }
+    showToast(`Released detour '${item.name}'`);
 
     if (isLocalApi) {
       try {
@@ -169,6 +191,7 @@
     onOpenImport={() => { showImportModal = true; }}
     onOpenNewDetour={() => { showNewDetourModal = true; }}
     onExportJson={handleExportJson}
+    onRefresh={() => reloadLocalData(true)}
   />
 
   <main class="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 py-8">
@@ -285,4 +308,12 @@
   <footer class="border-t border-stone-900 py-6 text-center text-xs text-stone-500 font-mono">
     <span>nix-detour &middot; declarative package holds &middot; kleinbem fleet</span>
   </footer>
+
+  <!-- Toast Notification -->
+  {#if toastMessage}
+    <div class="fixed bottom-6 right-6 z-50 px-4 py-2.5 rounded-xl bg-stone-900/95 border border-amber-500/50 text-stone-200 text-xs font-mono shadow-lg shadow-black/50 flex items-center gap-2">
+      <span class="w-2 h-2 rounded-full bg-emerald-400"></span>
+      <span>{toastMessage}</span>
+    </div>
+  {/if}
 </div>
