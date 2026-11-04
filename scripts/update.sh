@@ -7,8 +7,9 @@
 # trace that fails on its own in pkgs (one per target and run).
 #
 # Prints "broken <name> <reason>", "unattributed <target> <reason>" and
-# "ok <system> <count>". NIX_DETOUR_ARGS and NIX_DETOUR_OVERRIDE go to every nix
-# call; NIX_DETOUR_SYSTEMS (default: this one) are evaluated, only this one built.
+# "ok <system> <count>". NIX_DETOUR_ARGS and NIX_DETOUR_OVERRIDE go to every flake
+# eval and build; NIX_DETOUR_SYSTEMS (default: this one) are evaluated, only this
+# one built.
 set -uo pipefail
 
 flake="$1"
