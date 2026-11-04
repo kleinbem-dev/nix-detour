@@ -37,6 +37,7 @@ An example of it in use:
 | `patches`, `override` | optional: a fix on top, see [Fixing instead of holding](#fixing-instead-of-holding) |
 | `since` | when the hold started |
 | `releaseWhen` | optional: the nixpkgs attribute whose repair ends the hold (default: the package itself), e.g. the broken dependency of one of our own packages |
+| `untilVersion` | optional: delay release until the upstream package version is at least this version |
 | `reason`, `link` | why, and the upstream issue or PR that fixes it |
 | `tests` | optional: the `nixosTests` to run with the hold (default: `nixosTests.<name>`, if nixpkgs has it; `[]` for none) |
 
@@ -84,19 +85,28 @@ yourself.
 ## The CLI
 
 ```sh
+nix run github:kleinbem-dev/nix-detour -- list           # list all active holds, fixes, and PRs
+nix run github:kleinbem-dev/nix-detour -- check          # check upstream status for holds and PRs
+nix run github:kleinbem-dev/nix-detour -- release <name> # retire a hold, fix, or PR detour
+
 nix run github:kleinbem-dev/nix-detour -- hold add open-webui \
   --reason "chromadb needs posthog, broken since mcp 2" \
   --link https://github.com/NixOS/nixpkgs/pull/578265 \
-  --release-when python3Packages.posthog
+  --release-when python3Packages.posthog \
+  --until-version 0.5.0
 nix run github:kleinbem-dev/nix-detour -- hold list
-nix run github:kleinbem-dev/nix-detour -- hold check   # which holds can go
+nix run github:kleinbem-dev/nix-detour -- hold check     # which holds can go
 ```
 
 `hold add` holds a package on the nixpkgs your `flake.lock` had before its last
 nixpkgs update, read from git history: the usual case right after an update
-broke it. `--from stable` or `--from <rev>` choose another. `hold remove` drops a
-hold, and `hold check` runs the release checks locally. `--file`, `--lock` and
-`--input` point it at another holds file, lock or nixpkgs input.
+broke it. `--from stable` or `--from <rev>` choose another. `--until-version` delays
+release until upstream has reached at least that version. `hold remove` drops a
+hold, and `hold check` runs the release checks locally.
+
+Top-level `nix-detour list` and `nix-detour check` inspect both holds and PRs
+in one shot. `nix-detour release <name>` automatically finds whether `<name>` is a
+hold or PR and removes it cleanly.
 
 ## Web dashboard
 
@@ -104,7 +114,11 @@ hold, and `hold check` runs the release checks locally. `--file`, `--lock` and
 nix run github:kleinbem-dev/nix-detour#web
 ```
 
-Launches an interactive local Svelte 5 dashboard to visualize active holds, fixes, and PR detours across your fleet, inspect release conditions, and generate detour CLI commands.
+Launches an interactive local Svelte 5 dashboard to visualize active holds,
+fixes, and PR detours across your fleet. It provides live two-way sync with
+`held-packages.json` and `nixpkgs-prs.json`, queries upstream GitHub PR states
+and channel landing in real-time, displays status badges (Draft, Open, Merged,
+In Channel), and offers one-click release actions when upstream is ready.
 
 ## Lifecycle
 
@@ -279,6 +293,7 @@ nix run github:kleinbem-dev/nix-detour -- pr add mesh-llm --pr 571722 \
   --module mesh-llm=nixos/modules/services/misc/mesh-llm.nix
 nix run github:kleinbem-dev/nix-detour -- pr pin mesh-llm <newer full sha>
 nix run github:kleinbem-dev/nix-detour -- pr list
+nix run github:kleinbem-dev/nix-detour -- pr check    # check upstream PR state and channel landing
 nix run github:kleinbem-dev/nix-detour -- pr merged   # which entries can go
 ```
 

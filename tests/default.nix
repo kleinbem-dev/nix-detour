@@ -431,6 +431,14 @@ in
         test "$(cat bad.json)" = '{ broken'
         if nix-detour hold remove bar --file bad.json 2>/dev/null; then echo "remove from an invalid file should fail" >&2; exit 1; fi
         test "$(cat bad.json)" = '{ broken'
+
+        # Top-level list and release
+        nix-detour list > list_all.txt
+        grep -q '=== Holds & Fixes ===' list_all.txt
+        grep -q '^bar ' list_all.txt
+        nix-detour release bar
+        test "$(jq -r 'keys | join(",")' held-packages.json)" = baz
+        if nix-detour release missing 2>/dev/null; then echo "releasing a missing entry should fail" >&2; exit 1; fi
         touch $out
       '';
 
@@ -490,6 +498,10 @@ in
                 PATH=".:$PATH" nix-detour check > check_out.txt
                 grep -q '=== PRs ===' check_out.txt
                 grep -q 'landed' check_out.txt
+                nix-detour list > list_prs.txt
+                grep -q '=== PRs ===' list_prs.txt
+                nix-detour release landed
+                test "$(jq -r 'has("landed")' nixpkgs-prs.json)" = false
                 touch $out
       '';
 
