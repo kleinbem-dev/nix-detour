@@ -2,9 +2,9 @@
 import argparse
 import http.server
 import json
+import logging
 import os
 import subprocess
-import sys
 import time
 import urllib.parse
 import urllib.request
@@ -23,6 +23,8 @@ args, unknown = parser.parse_known_args()
 # Handle positional arguments if passed
 PORT = int(args.port_pos) if args.port_pos and args.port_pos.isdigit() else args.port
 STATIC_DIR = args.static_dir_pos if args.static_dir_pos else (args.static_dir or os.path.join(os.path.dirname(__file__), "dist"))
+
+log = logging.getLogger("nix-detour")
 
 PR_CACHE = {}
 CACHE_TTL = 60
@@ -74,8 +76,8 @@ def fetch_pr_status(pr_number, upstream="NixOS/nixpkgs", channel="nixos-unstable
         )
         if res.returncode == 0:
             pr_data = json.loads(res.stdout)
-    except Exception:
-        pass
+    except Exception as e:
+        log.debug("gh api failed for %r#%s, falling back to urllib: %s", upstream, pr_number, e)
 
     if not pr_data:
         try:
@@ -86,10 +88,11 @@ def fetch_pr_status(pr_number, upstream="NixOS/nixpkgs", channel="nixos-unstable
             token = os.environ.get("GITHUB_TOKEN")
             if token:
                 req.add_header("Authorization", f"Bearer {token}")
-            with urllib.request.urlopen(req, timeout=5) as response:
+            # The scheme and host are fixed (https://api.github.com); only the path varies.
+            with urllib.request.urlopen(req, timeout=5) as response:  # noqa: S310
                 pr_data = json.loads(response.read().decode("utf-8"))
-        except Exception:
-            pass
+        except Exception as e:
+            log.warning("GitHub API request failed for %r#%s: %s", upstream, pr_number, e)
 
     if not pr_data:
         result = {
@@ -130,8 +133,8 @@ def fetch_pr_status(pr_number, upstream="NixOS/nixpkgs", channel="nixos-unstable
                 )
                 if res.returncode == 0:
                     comp_status = json.loads(res.stdout).get("status")
-            except Exception:
-                pass
+            except Exception as e:
+                log.debug("gh api compare failed for %s, falling back to urllib: %s", merge_commit, e)
 
             if not comp_status:
                 try:
@@ -142,10 +145,11 @@ def fetch_pr_status(pr_number, upstream="NixOS/nixpkgs", channel="nixos-unstable
                     token = os.environ.get("GITHUB_TOKEN")
                     if token:
                         req.add_header("Authorization", f"Bearer {token}")
-                    with urllib.request.urlopen(req, timeout=5) as response:
+                    # The scheme and host are fixed (https://api.github.com); only the path varies.
+                    with urllib.request.urlopen(req, timeout=5) as response:  # noqa: S310
                         comp_status = json.loads(response.read().decode("utf-8")).get("status")
-                except Exception:
-                    pass
+                except Exception as e:
+                    log.warning("GitHub compare request failed for %s: %s", merge_commit, e)
 
         if comp_status in ("behind", "identical"):
             status = "in-channel"
@@ -207,14 +211,14 @@ class DetourHandler(http.server.SimpleHTTPRequestHandler):
                 try:
                     with open(holds_file, "r") as f:
                         holds = json.load(f)
-                except Exception:
-                    pass
+                except Exception as e:
+                    log.warning("could not read %s: %s", holds_file, e)
             if os.path.exists(prs_file):
                 try:
                     with open(prs_file, "r") as f:
                         prs = json.load(f)
-                except Exception:
-                    pass
+                except Exception as e:
+                    log.warning("could not read %s: %s", prs_file, e)
 
             source_info = {
                 "holdsFile": holds_file if os.path.exists(holds_file) else None,
@@ -318,8 +322,8 @@ class DetourHandler(http.server.SimpleHTTPRequestHandler):
                         with open(target, "w") as f:
                             json.dump(cur, f, indent=2)
                             f.write("\n")
-                except Exception:
-                    pass
+                except Exception as e:
+                    log.warning("could not release %r from %s: %s", name, target, e)
 
             resp = json.dumps({"ok": True}).encode("utf-8")
             self.send_response(200)
@@ -334,6 +338,7 @@ class DetourHandler(http.server.SimpleHTTPRequestHandler):
 
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     server = http.server.HTTPServer(("127.0.0.1", PORT), DetourHandler)
     print(f"Serving nix-detour dashboard at http://127.0.0.1:{PORT}")
     try:
