@@ -49,10 +49,13 @@ innermost() {
 # dependencies) and reports each watched package in "${mine[@]}" that needs
 # one that fails. Nothing else of the package is built.
 build_fetches() {
-  local fods fod name drv why closure
-  # shellcheck disable=SC2086  # one derivation per word
-  mapfile -t fods < <(nix derivation show $tobuild 2>/dev/null \
-    | jq -r '(.derivations // .) | to_entries[] | select(.value.outputs.out.hash != null) | .key | sub(".*/"; "")')
+  local shown fods fod name drv why closure
+  # A failed inspection is reported: no fetches found would read as "ok".
+  shown=$(nix derivation show --stdin <<<"$tobuild" 2>"$tmp/err") || {
+    echo "unattributed $watchOut.$system fetches not checked: $(innermost <"$tmp/err")"
+    return 0
+  }
+  mapfile -t fods < <(jq -r '(.derivations // .) | to_entries[] | select(.value.outputs.out.hash != null) | .key | sub(".*/"; "")' <<<"$shown")
   ((${#fods[@]})) || return 0
   fods=("${fods[@]/#//nix/store/}")
   nix build "${extra[@]}" --no-link --keep-going "${fods[@]/%/^*}" 2>&1 | tee "$tmp/fetch.log" >&2
