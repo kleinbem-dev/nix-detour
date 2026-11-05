@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Update action: `build: fetches` builds only the fixed-output derivations
+  (sources, vendored dependencies) of the watched packages no substituter
+  has. A hash mismatch never shows in an evaluation; this finds it without
+  compiling the packages, and the report has the hash nix got.
+
 - Fixes: a held package can carry `patches` (URLs pinned by hash, or files
   next to the holds file) and an `override` file, and `from = "current"`
   fixes the package of your own nixpkgs instead of holding an older one.
