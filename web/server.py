@@ -77,7 +77,7 @@ def fetch_pr_status(pr_number, upstream="NixOS/nixpkgs", channel="nixos-unstable
         if res.returncode == 0:
             pr_data = json.loads(res.stdout)
     except Exception as e:
-        log.debug("gh api failed for %s#%s, falling back to urllib: %s", upstream, pr_number, e)
+        log.debug("gh api failed for %r#%s, falling back to urllib: %s", upstream, pr_number, e)
 
     if not pr_data:
         try:
@@ -92,7 +92,7 @@ def fetch_pr_status(pr_number, upstream="NixOS/nixpkgs", channel="nixos-unstable
             with urllib.request.urlopen(req, timeout=5) as response:  # noqa: S310
                 pr_data = json.loads(response.read().decode("utf-8"))
         except Exception as e:
-            log.warning("GitHub API request failed for %s#%s: %s", upstream, pr_number, e)
+            log.warning("GitHub API request failed for %r#%s: %s", upstream, pr_number, e)
 
     if not pr_data:
         result = {
@@ -323,7 +323,7 @@ class DetourHandler(http.server.SimpleHTTPRequestHandler):
                             json.dump(cur, f, indent=2)
                             f.write("\n")
                 except Exception as e:
-                    log.warning("could not release %s from %s: %s", name, target, e)
+                    log.warning("could not release %r from %s: %s", name, target, e)
 
             resp = json.dumps({"ok": True}).encode("utf-8")
             self.send_response(200)
