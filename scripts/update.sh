@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-# Usage: scripts/update.sh FLAKE [--no-build] [--only a,b]
+# Usage: scripts/update.sh FLAKE [--no-build | --build-fetches] [--only a,b]
 #
 # After a lock update, finds the failing packages FLAKE uses, so they can be held:
 # nixDetourWatch packages are evaluated one by one and built if no substituter has
-# them; for each failing nixDetourTargets target, the innermost derivation in the
-# trace that fails on its own in pkgs (one per target and run).
+# them (with --build-fetches only their fixed-output derivations, where a stale
+# hash shows); for each failing nixDetourTargets target, the innermost derivation
+# in the trace that fails on its own in pkgs (one per target and run).
 #
 # Prints "broken <name> <reason>", "unattributed <target> <reason>" and
 # "ok <system> <count>". NIX_DETOUR_ARGS and NIX_DETOUR_OVERRIDE go to every flake
@@ -18,6 +19,7 @@ build=true only=""
 while (($#)); do
   case "$1" in
     --no-build) build=false; shift ;;
+    --build-fetches) build=fetches; shift ;;
     --only) only="$2"; shift 2 ;;
     *) echo "unknown option $1" >&2; exit 1 ;;
   esac
@@ -41,6 +43,47 @@ innermost() {
     inlist && /^[[:space:]]*- / { sub(/^[[:space:]]*/, " "); last = last $0; next }
     { inlist = 0 }
     END { print last }' | sed -E 's| in /nix/store/[^ ]+||' | cut -c1-300
+}
+
+# Builds only the fixed-output derivations among $tobuild (fetches, vendored
+# dependencies) and reports each watched package in "${mine[@]}" that needs
+# one that fails. Nothing else of the package is built.
+build_fetches() {
+  local fods fod name drv why closure
+  # shellcheck disable=SC2086  # one derivation per word
+  mapfile -t fods < <(nix derivation show $tobuild 2>/dev/null \
+    | jq -r '(.derivations // .) | to_entries[] | select(.value.outputs.out.hash != null) | .key | sub(".*/"; "")')
+  ((${#fods[@]})) || return 0
+  fods=("${fods[@]/#//nix/store/}")
+  nix build "${extra[@]}" --no-link --keep-going "${fods[@]/%/^*}" 2>&1 | tee "$tmp/fetch.log" >&2
+  : >"$tmp/failed"
+  for fod in "${fods[@]}"; do
+    # shellcheck disable=SC2046  # one output path
+    nix-store --check-validity $(nix-store -q --outputs "$fod") 2>/dev/null && continue
+    name=${fod#/nix/store/*-}
+    name=${name%.drv}
+    # nix's own error has the hash a fix needs.
+    why=$(awk -v d="$fod" 'index($0, "hash mismatch in fixed-output derivation") && index($0, d) { hit = 1 }
+      hit && /got:/ { print $NF; exit }' "$tmp/fetch.log")
+    if [[ -n $why ]]; then
+      why="hash mismatch in $name (got $why)"
+    else
+      why="its fetch $name fails"
+    fi
+    printf '%s\t%s\n' "$fod" "$why" >>"$tmp/failed"
+  done
+  [[ -s $tmp/failed ]] || return 0
+  while read -r name drv; do
+    closure=$(nix-store -qR "$drv")
+    while IFS=$'\t' read -r fod why; do
+      if grep -qxF "$fod" <<<"$closure"; then
+        broken+=("$name")
+        echo "broken $name $why"
+        break
+      fi
+    done <"$tmp/failed"
+  done < <(jq -r --arg m "${mine[*]}" '($m | split(" ")) as $set
+    | to_entries[] | select(.value != null and (.value.drv | IN($set[]))) | "\(.key) \(.value.drv)"' <<<"$results")
 }
 
 # Why evaluating watched package NAME fails.
@@ -100,7 +143,7 @@ check() {
       echo "broken $name $(reason "$name")"
     done < <(jq -r 'to_entries[] | select(.value == null) | .key' <<<"$results")
 
-    if $build && [[ $system == "$native" ]]; then
+    if [[ $build != false && $system == "$native" ]]; then
       mapfile -t drvs < <(jq -r '.[] | select(. != null) | .drv' <<<"$results")
       if ((${#drvs[@]})); then
         # What no substituter has: the watched derivations themselves among what
@@ -108,7 +151,9 @@ check() {
         tobuild=$(nix build "${extra[@]}" --dry-run "${drvs[@]/%/^*}" 2>&1 | sed -n '/will be built:/,/will be fetched/p' | grep -oE '/nix/store/[^ ]+\.drv' | sort -u)
         mapfile -t mine < <(jq -r --arg b "$tobuild" '($b | split("\n")) as $set
           | to_entries[] | select(.value != null and (.value.drv | IN($set[]))) | .value.drv' <<<"$results")
-        if ((${#mine[@]})); then
+        if ((${#mine[@]})) && [[ $build == fetches ]]; then
+          build_fetches
+        elif ((${#mine[@]})); then
           nix build "${extra[@]}" --no-link --keep-going "${mine[@]/%/^*}" >&2 || true
           while read -r name out; do
             if ! nix path-info "$out" >/dev/null 2>&1; then

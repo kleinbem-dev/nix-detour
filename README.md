@@ -201,6 +201,9 @@ The holds go to the PR branch as one signed commit; the hold-release action
 removes them again once nixos-unstable has the fix. `held`, `failed` and a
 Markdown `report` are outputs, for a PR comment or an issue. `build: false`
 only evaluates (for big closures such as CUDA, where substituters decide);
+`build: fetches` builds only the fixed-output derivations of the watched
+packages no substituter has (sources, vendored dependencies), so a package
+whose hash went stale is found in minutes without compiling anything;
 `directory` and `nix-args` cover a checkout in a subfolder and flakes that
 need `--override-input`; `systems: x86_64-linux aarch64-linux` checks other
 systems' hosts from the same runner (evaluation only, builds need the

@@ -8,7 +8,7 @@
 # With HOLDS_REPO (cloned by clone-holds.sh), commit mode opens a PR there.
 #
 # Environment: FLAKE, HOLDS, INPUT, BASE, MODE (commit|report), BRANCH,
-# BUILD (true|false), NIX_DETOUR_ARGS, GH_TOKEN, HOLDS_REPO, HOLDS_INPUT,
+# BUILD (true|fetches|false), NIX_DETOUR_ARGS, GH_TOKEN, HOLDS_REPO, HOLDS_INPUT,
 # HOLDS_TOKEN; RUNNER_TEMP, GITHUB_OUTPUT, GITHUB_STEP_SUMMARY and
 # GITHUB_REPOSITORY as on GitHub.
 set -euo pipefail
@@ -17,7 +17,11 @@ here=$(dirname "$(realpath "$0")")
 results="$1"
 cli=(nix run "path:$here/.." --)
 args=()
-[[ $BUILD == true ]] || args+=(--no-build)
+case $BUILD in
+  true) ;;
+  fetches) args+=(--build-fetches) ;;
+  *) args+=(--no-build) ;;
+esac
 
 git fetch -q --depth 1 origin "$BASE" || { echo "cannot fetch $BASE from origin (is this a git checkout of the repository?)" >&2; exit 1; }
 base_lock=$(git show FETCH_HEAD:flake.lock) || { echo "$BASE has no flake.lock" >&2; exit 1; }

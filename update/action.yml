@@ -46,7 +46,10 @@ inputs:
     description: The systems to check, separated by spaces (default the runner's); any system evaluates, only the runner's builds
     default: ""
   build:
-    description: Build the watched packages no substituter has ("false" only evaluates)
+    description: >-
+      Build the watched packages no substituter has; "fetches" builds only
+      their fixed-output derivations (a stale hash shows there, in minutes),
+      "false" only evaluates
     default: "true"
 outputs:
   held:
@@ -84,7 +87,11 @@ runs:
       run: |
         set -euo pipefail
         args=()
-        [[ $BUILD == true ]] || args+=(--no-build)
+        case $BUILD in
+          true) ;;
+          fetches) args+=(--build-fetches) ;;
+          *) args+=(--no-build) ;;
+        esac
         "$GITHUB_ACTION_PATH/../scripts/update.sh" "$FLAKE" "${args[@]}" | tee "$RUNNER_TEMP/update.txt"
 
     - name: Hold them on the previous nixpkgs
