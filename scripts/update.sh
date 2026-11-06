@@ -46,13 +46,21 @@ innermost() {
     END { print last }' | sed -E 's| in /nix/store/[^ ]+||' | cut -c1-300
 }
 
-# The first network error in nix's log $1: a download that failed, not a
-# broken package. Only errors count (nix warns on every retry), and a 404 is
-# not one of them: that source is gone.
+# The network error that stopped the build in nix's log $1, if that is why it
+# failed: a download, not a broken package. When a builder failed, only its
+# output counts (a substitute that failed before nix built the path itself
+# stays in the log); else nix's own download errors. Warnings (one per retry)
+# and a 404 (that source is gone) don't count.
 network_error() {
-  sed 's/\x1b\[[0-9;]*m//g' "$1" | grep -m1 -oE \
-    "error: unable to download '[^']+': (HTTP error (429|5[0-9][0-9])|Could not|Couldn't|Timeout|Failed to connect|SSL|Recv failure|Empty reply)[^;]*|curl: \((6|7|28|35|52|56)\)[^;]*|curl: \(22\) The requested URL returned error: (429|5[0-9][0-9])" |
-    cut -c1-200
+  local log net
+  log=$(sed 's/\x1b\[[0-9;]*m//g' "$1")
+  net="Could not resolve host|Could not connect|Couldn't connect|Failed to connect|Connection (timed out|refused|reset)|Timeout was reached|SSL connect error|Recv failure|Empty reply"
+  if grep -q "builder for '[^']*' failed" <<<"$log"; then
+    grep -E '^[[:space:]]*>' <<<"$log" | grep -m1 -oE \
+      "curl: \((6|7|28|35|52|56)\)[^;]*|curl: \(22\) The requested URL returned error: (429|5[0-9][0-9])|fatal: unable to access '[^']+': ($net|The requested URL returned error: (429|5[0-9][0-9]))[^;]*"
+  else
+    grep -m1 -oE "error: unable to download '[^']+': (HTTP error (429|5[0-9][0-9])|$net)[^;]*" <<<"$log"
+  fi | cut -c1-200
 }
 
 # Builds only the fixed-output derivations among $tobuild (fetches, vendored
@@ -103,6 +111,7 @@ build_fetches() {
     done <"$tmp/failed"
     while IFS=$'\t' read -r fod why; do
       if grep -qxF "$fod" <<<"$closure"; then
+        unavailable+=("$name")
         echo "unavailable $name $why"
         continue 2
       fi
@@ -126,8 +135,8 @@ has_output() {
 
 # Checks one system; $system is the one.
 check() {
-  local system="$1" results broken watch targets target err chain name why list watchOut targetsOut
-  results='{}' broken=()
+  local system="$1" results broken unavailable watch targets target err chain name why list watchOut targetsOut
+  results='{}' broken=() unavailable=()
   # The old nix-holds output names still work, with a warning.
   watchOut=nixDetourWatch targetsOut=nixDetourTargets
   if ! has_output nixDetourWatch && has_output nixHoldsWatch; then
@@ -186,6 +195,7 @@ check() {
             nix build "${extra[@]}" --fallback --no-link "$drv^*" >"$tmp/one.log" 2>&1 && continue
             cat "$tmp/one.log" >&2
             if why=$(network_error "$tmp/one.log") && [[ -n $why ]]; then
+              unavailable+=("$name")
               echo "unavailable $name $why"
             else
               broken+=("$name")
@@ -222,7 +232,7 @@ check() {
     done
   fi
 
-  echo "ok $system $(($(jq 'length' <<<"$results") - ${#broken[@]}))"
+  echo "ok $system $(($(jq 'length' <<<"$results") - ${#broken[@]} - ${#unavailable[@]}))"
 }
 
 for system in "${systems[@]}"; do
