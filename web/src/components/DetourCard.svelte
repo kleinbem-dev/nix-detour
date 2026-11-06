@@ -41,10 +41,13 @@
     setTimeout(() => { copied = false; }, 1500);
   }
 
+  const cliCommand = $derived(
+    `nix-detour release ${/^[a-zA-Z0-9_.-]+$/.test(item.name) ? item.name : shQuote(item.name)}`
+  );
+
   function copyCliCommand(e: MouseEvent) {
     e.stopPropagation();
-    const arg = /^[a-zA-Z0-9_.-]+$/.test(item.name) ? item.name : shQuote(item.name);
-    navigator.clipboard.writeText(`nix-detour release ${arg}`);
+    navigator.clipboard.writeText(cliCommand);
     copiedCommand = true;
     setTimeout(() => { copiedCommand = false; }, 1500);
   }
@@ -272,7 +275,7 @@
       <button
         type="button"
         onclick={copyCliCommand}
-        title={`Copy CLI release command (\`nix-detour release ${item.name}\`)`}
+        title="Copy CLI release command ({cliCommand})"
         class="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-stone-800/80 hover:bg-stone-700/80 text-stone-300 border border-stone-700/60 font-mono text-[11px] transition cursor-pointer"
       >
         {#if copiedCommand}
