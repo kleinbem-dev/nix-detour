@@ -1,0 +1,32 @@
+name: check
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  zizmor:
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+    uses: kleinbem/actions/.github/workflows/zizmor.yaml@a1647881d0d61e4d5b299a054c3ec1e0ace1ebba # v1.2.2
+
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: kleinbem/actions/nix-setup@7ec628296d5194e6e10031706387b992a10a1638 # v1.0.1
+      - name: Build the held packages
+        run: nix flake check
+      # flake check doesn't build the web app; this is what catches a bad npm bump.
+      - name: Build web
+        run: nix build .#web
+      - name: Formatting
+        run: nix fmt -- --fail-on-change
