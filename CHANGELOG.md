@@ -9,6 +9,10 @@
   list its packages one by one (`<scope>.<name>`), so `pr eval` and
   `merged` cover each of them.
 
+- PRs: `merged` needs a version on both sides. A PR package without a version
+  stays until you remove its entry, instead of counting as merged as soon as
+  nixpkgs has the attribute.
+
 - Update action: `build: fetches` builds only the fixed-output derivations
   (sources, vendored dependencies) of the watched packages no substituter
   has. A hash mismatch never shows in an evaluation; this finds it without

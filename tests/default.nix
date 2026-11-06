@@ -99,6 +99,7 @@ let
       platform = {
         pr = 4;
         attrs = [
+          "fake-app"
           "fake-lib"
           "fake-plugins"
         ];
@@ -266,6 +267,7 @@ let
     testPrChecksListDerivations = {
       expr = builtins.attrNames prChecks.platform.packages;
       expected = [
+        "fake-app"
         "fake-lib"
         "fake-plugins.one"
         "python3Packages.fake-py"
@@ -283,6 +285,32 @@ let
         true
         true
       ];
+    };
+    # A top-level package of the PR that needs one of its Python packages.
+    testPrAppFindsItsPython = {
+      expr = [
+        withPrs.fake-app.text
+        prChecks.platform.packages.fake-app.text
+      ];
+      expected = [
+        "${withPrs.python3Packages.fake-py}"
+        "${prChecks.platform.packages."python3Packages.fake-py"}"
+      ];
+    };
+    # Without a version on either side, nixpkgs' package is no evidence that
+    # the PR is in.
+    testPrMergedNeedsVersions = {
+      expr =
+        (
+          (mkPrs {
+            fetch = _: ./fake-pr;
+            prs.unversioned = {
+              attrs = [ "fake-b" ];
+            };
+          }).checks
+            (pkgs.extend (final: _: { fake-b = final.writeText "fake-b" "other"; }))
+        ).unversioned.merged;
+      expected = false;
     };
     testPrPythonSiblingResolved = {
       expr = prChecks.platform.packages."python3Packages.fake-py-user".text;

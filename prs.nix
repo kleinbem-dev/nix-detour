@@ -74,6 +74,17 @@ let
       python.callPackage path (lib.intersectAttrs (lib.functionArgs (import path)) ours)
     );
 
+  # One entry's packages, and its Python packages in every Python package
+  # set, where they find the entry's other packages in the overlaid set.
+  entryOverlay =
+    entry: final: prev:
+    packagesOf final entry
+    // lib.optionalAttrs (entry.pythonPackages or [ ] != [ ]) {
+      pythonPackagesExtensions = prev.pythonPackagesExtensions ++ [
+        (pyfinal: _: pythonPackagesOf pyfinal (lib.getAttrs entry.attrs final) entry)
+      ];
+    };
+
   # The derivations of a set of packages, a scope's as `<scope>.<name>`, so the
   # tools can evaluate and build each one.
   derivations =
@@ -96,21 +107,7 @@ assert lib.assertMsg (lib.allUnique allPython) "nix-detour prs: a Python package
 
   # Every entry's packages, built against the package set the overlay is
   # applied to.
-  # Python packages go into every Python package set, and find the entries'
-  # other packages in the overlaid set.
-  overlay =
-    final: prev:
-    packages final
-    // lib.optionalAttrs (allPython != [ ]) {
-      pythonPackagesExtensions = prev.pythonPackagesExtensions ++ [
-        (
-          pyfinal: _:
-          lib.concatMapAttrs (
-            _: entry: pythonPackagesOf pyfinal (lib.getAttrs entry.attrs final) entry
-          ) entries
-        )
-      ];
-    };
+  overlay = lib.composeManyExtensions (map entryOverlay (lib.attrValues entries));
 
   # Without meta.doc: the manual build rejects chapters missing from nixpkgs'
   # redirects.json. Wrappers keep the function's argument names, since the module
@@ -142,29 +139,26 @@ assert lib.assertMsg (lib.allUnique allPython) "nix-detour prs: a Python package
     lib.mapAttrs (
       _: entry:
       let
-        ours = packagesOf pkgs entry;
-        # The entry's Python packages in a Python set that has all of them, as
-        # the overlay's does, so they find each other.
-        pythonSet =
-          let
-            python = pkgs.python3.override {
-              self = python;
-              packageOverrides = pyfinal: _: pythonPackagesOf pyfinal ours entry;
-            };
-          in
-          python.pkgs;
+        # The entry's packages as the overlay gives them, so they find each
+        # other in both directions, and on top of the consumer's own Python
+        # overrides.
+        withEntry = pkgs.extend (entryOverlay entry);
+        ours = lib.getAttrs entry.attrs withEntry;
         python = lib.mapAttrs' (name: lib.nameValuePair "python3Packages.${name}") (
-          lib.getAttrs (entry.pythonPackages or [ ]) pythonSet
+          lib.getAttrs (entry.pythonPackages or [ ]) withEntry.python3Packages
         );
         all = derivations ours // python;
         # Whether nixpkgs has the package at this attribute path, in the same or
-        # a newer version.
+        # a newer version. Without a version on either side there's no
+        # evidence, and the entry stays.
         inNixpkgs =
           path:
           let
             theirs = lib.attrByPath (lib.splitString "." path) null pkgs;
           in
-          theirs != null && builtins.compareVersions (theirs.version or "") (all.${path}.version or "") >= 0;
+          theirs ? version
+          && all.${path} ? version
+          && builtins.compareVersions theirs.version all.${path}.version >= 0;
       in
       {
         packages = all;
