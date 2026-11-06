@@ -144,12 +144,14 @@ A held package runs under the NixOS module of the consumer's current nixpkgs,
 and a module that expects a newer package only fails at runtime.
 `nixosTests pkgs` gives the nixpkgs NixOS tests of the held packages
 (`tests`, see above) from a package set with the holds applied; run them in
-your CI with your own overlays on top, since that is the package you deploy:
+your CI with your own overlays in the order you deploy them, since that is
+the package you deploy:
 
 ```nix
 checks.${system} = holds.nixosTests (import nixpkgs {
   inherit system;
-  overlays = yourOverlays ++ [ holds.overlay ];
+  # A wrapper fix on top of a held package goes after holds.overlay.
+  overlays = overlaysBefore ++ [ holds.overlay ] ++ overlaysAfter;
 });
 ```
 
