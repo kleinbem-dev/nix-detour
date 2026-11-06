@@ -8,7 +8,7 @@ set -euo pipefail
 
 [[ -n ${HOLDS_INPUT:-} ]] || { echo "holds-repo needs holds-input (its flake input here)" >&2; exit 1; }
 # A misspelt input would leave every check on the locked holds (some Nix
-# versions only warn about an unknown --override-input).
+# versions only warn about an unknown --override-input; no-link: Nix's design).
 lock="${FLAKE:-.}/flake.lock"
 # Nested paths (a/b) are walked through the lock, follows included.
 # shellcheck disable=SC2016  # a jq program
@@ -35,7 +35,7 @@ else
   gh repo clone "$HOLDS_REPO" "$clone" -- --depth 1 -q
   if [[ -n $rev ]]; then
     # gh's credentials only reach its own clone; the fetch gets them too, for
-    # a private holds repository.
+    # a private holds repository (no-link: gh's design).
     git -C "$clone" -c credential.helper= -c 'credential.helper=!gh auth git-credential' \
       fetch -q --depth 1 origin "$rev"
     git -C "$clone" checkout -q FETCH_HEAD
