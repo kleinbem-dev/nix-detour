@@ -68,7 +68,8 @@ case "${1:-}" in
     ;;
   web)
     shift
-    exec @webServer@ "$@"
+    # The server adds holds and fixes through this CLI.
+    exec @webServer@ --cli "$(readlink -f "$0")" "$@"
     ;;
   add) die "add requires domain: nix-detour hold add ... or nix-detour pr add ..." ;;
   -h | --help | "")

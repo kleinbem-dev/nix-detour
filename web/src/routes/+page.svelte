@@ -62,12 +62,13 @@
   let toastMessage = $state<string | null>(null);
   let toastTimeout: ReturnType<typeof setTimeout> | null = null;
 
-  function showToast(msg: string) {
+  // Errors stay longer: they can carry the CLI's message.
+  function showToast(msg: string, ms = 3000) {
     if (toastTimeout) clearTimeout(toastTimeout);
     toastMessage = msg;
     toastTimeout = setTimeout(() => {
       toastMessage = null;
-    }, 3000);
+    }, ms);
   }
 
   // Derived detours list
@@ -96,7 +97,7 @@
       } else if (currentFilter === 'ready') {
         if (item.kind !== 'pr' || !item.prNumber) return false;
         const status = prStatuses[item.prNumber];
-        if (status && !status.inChannel) return false;
+        if (!status?.inChannel) return false;
       } else if (currentFilter !== 'all') {
         if (item.kind !== currentFilter) return false;
       }
@@ -208,28 +209,52 @@
     reloadLocalData(false);
   });
 
-  async function handleCreateDetour(name: string, kind: DetourKind, entry: HoldEntry | PrEntry) {
-    if (kind === 'pr') {
-      rawPrs = { ...rawPrs, [name]: entry as PrEntry };
-    } else {
-      rawHolds = { ...rawHolds, [name]: entry as HoldEntry };
-    }
-    showToast(`Added ${kind === 'pr' ? 'PR' : 'hold'} detour '${name}'`);
+  // The server's error message, or the HTTP status.
+  async function syncError(res: Response): Promise<string> {
+    try {
+      const data = await res.json();
+      if (data?.error) return data.error;
+    } catch {}
+    return `HTTP ${res.status}`;
+  }
 
-    if (isLocalApi) {
-      try {
-        await fetch('/api/detour', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name, kind, entry })
-        });
-      } catch (err) {
-        console.error('Failed to sync to local disk:', err);
+  // True once saved; the form stays open otherwise.
+  async function handleCreateDetour(name: string, kind: DetourKind, entry: HoldEntry | PrEntry): Promise<boolean> {
+    const label = kind === 'pr' ? 'PR' : kind;
+    if (!isLocalApi) {
+      if (kind === 'pr') {
+        rawPrs = { ...rawPrs, [name]: entry as PrEntry };
+      } else {
+        rawHolds = { ...rawHolds, [name]: entry as HoldEntry };
       }
+      showToast(`Added ${label} detour '${name}'`);
+      return true;
+    }
+
+    // The server writes the entry (holds and fixes through the CLI, which
+    // pins revisions and patch URLs by hash), so show what it saved.
+    showToast(`Saving ${label} detour '${name}'…`);
+    try {
+      const res = await fetch('/api/detour', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, kind, entry })
+      });
+      if (!res.ok) {
+        showToast(`Could not add '${name}': ${await syncError(res)}`, 10000);
+        return false;
+      }
+      await reloadLocalData(false);
+      showToast(`Added ${label} detour '${name}'`);
+      return true;
+    } catch (err) {
+      console.error('Failed to sync to local disk:', err);
+      showToast(`Could not add '${name}': the local server is not reachable`, 10000);
+      return false;
     }
   }
 
-  async function handleReleaseDetour(item: DetourItem) {
+  function removeFromView(item: DetourItem) {
     if (item.kind === 'pr') {
       const next = { ...rawPrs };
       delete next[item.name];
@@ -239,19 +264,28 @@
       delete next[item.name];
       rawHolds = next;
     }
-    showToast(`Released detour '${item.name}'`);
+  }
 
+  async function handleReleaseDetour(item: DetourItem) {
     if (isLocalApi) {
       try {
-        await fetch(`/api/release`, {
+        const res = await fetch(`/api/release`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ name: item.name, kind: item.kind })
         });
+        if (!res.ok) {
+          showToast(`Could not release '${item.name}': ${await syncError(res)}`, 10000);
+          return;
+        }
       } catch (err) {
         console.error('Failed to sync release to disk:', err);
+        showToast(`Could not release '${item.name}': the local server is not reachable`, 10000);
+        return;
       }
     }
+    removeFromView(item);
+    showToast(`Released detour '${item.name}'`);
   }
 
   function handleExportJson() {
@@ -279,12 +313,15 @@
     rawHolds = newHolds;
     rawPrs = newPrs;
     sourceName = source;
+    // Not the local files any more: create and release stay in the page.
+    isLocalApi = false;
   }
 
   function handleResetDefault() {
     rawHolds = initialHolds;
     rawPrs = initialPrs;
     sourceName = 'kleinbem/nix-detour-fleet (sample)';
+    isLocalApi = false;
   }
 
   function handleWindowKeydown(e: KeyboardEvent) {
@@ -501,6 +538,7 @@
       isOpen={showNewDetourModal}
       onClose={() => { showNewDetourModal = false; }}
       onCreateDetour={handleCreateDetour}
+      canPin={isLocalApi}
     />
   {/if}
 

@@ -1,13 +1,17 @@
 <script lang="ts">
   import type { DetourKind, HoldEntry, PrEntry } from '../types';
+  import { dialogFocus } from '../utils';
 
   interface Props {
     isOpen: boolean;
     onClose: () => void;
-    onCreateDetour: (name: string, kind: DetourKind, entry: HoldEntry | PrEntry) => void;
+    // Resolves true once saved; on false the form keeps what was typed.
+    onCreateDetour: (name: string, kind: DetourKind, entry: HoldEntry | PrEntry) => Promise<boolean>;
+    // The local server pins revisions and patch URLs by hash; without it they can't be saved.
+    canPin: boolean;
   }
 
-  let { isOpen, onClose, onCreateDetour }: Props = $props();
+  let { isOpen, onClose, onCreateDetour, canPin }: Props = $props();
 
   let activeTab = $state<DetourKind>('fix');
   let packageName = $state('');
@@ -69,7 +73,7 @@
     errorMsg = '';
   }
 
-  function handleSubmit() {
+  async function handleSubmit() {
     errorMsg = '';
     const name = packageName.trim();
     if (!name) {
@@ -96,9 +100,10 @@
         untilChannel: prChannel.trim() || 'nixos-unstable'
       };
 
-      onCreateDetour(name, 'pr', entry);
-      resetForm();
-      onClose();
+      if (await onCreateDetour(name, 'pr', entry)) {
+        resetForm();
+        onClose();
+      }
       return;
     }
 
@@ -114,11 +119,21 @@
         errorMsg = 'Commit hash is required when custom source is selected';
         return;
       }
+      if (!canPin) {
+        errorMsg = 'A specific revision needs the local server (nix-detour web) to pin its hash';
+        return;
+      }
+      // The server's CLI call fills in the hash.
       sourceVal = { rev: customRev.trim(), narHash: '' };
     }
 
-    if (activeTab === 'fix' && patches.length === 0 && !overrideFile.trim()) {
+    const isFix = activeTab === 'fix';
+    if (isFix && patches.length === 0 && !overrideFile.trim()) {
       errorMsg = 'Fix requires at least one patch URL/file or an override expression file';
+      return;
+    }
+    if (isFix && !canPin && patches.some((p) => /^https?:\/\//.test(p))) {
+      errorMsg = 'A patch URL needs the local server (nix-detour web) to pin its hash';
       return;
     }
 
@@ -129,13 +144,15 @@
       link: link.trim() || undefined,
       releaseWhen: releaseWhen.trim() || undefined,
       untilVersion: untilVersion.trim() || undefined,
-      patches: patches.length > 0 ? patches : undefined,
-      override: overrideFile.trim() || undefined
+      // Only the Fix tab shows these; a hold keeps none left over from it.
+      patches: isFix && patches.length > 0 ? patches : undefined,
+      override: isFix ? overrideFile.trim() || undefined : undefined
     };
 
-    onCreateDetour(name, activeTab, entry);
-    resetForm();
-    onClose();
+    if (await onCreateDetour(name, activeTab, entry)) {
+      resetForm();
+      onClose();
+    }
   }
 </script>
 
@@ -154,6 +171,7 @@
       aria-modal="true"
       aria-labelledby="new-detour-title"
       tabindex="-1"
+      use:dialogFocus
       onclick={(e) => e.stopPropagation()}
       onkeydown={(e) => {
         if (e.key === 'Escape') onClose();

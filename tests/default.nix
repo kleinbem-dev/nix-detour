@@ -661,6 +661,52 @@ in
                 touch $out
       '';
 
+  # The dashboard server: adds holds through the CLI, refuses other sites.
+  web-server =
+    pkgs.runCommand "nix-detour-web-server-tests"
+      {
+        nativeBuildInputs = [
+          pkgs.curl
+          pkgs.jq
+          pkgs.python3
+        ];
+        __darwinAllowLocalNetworking = true;
+      }
+      ''
+        set -euo pipefail
+        port=18765 url=http://127.0.0.1:18765
+        python3 ${../web/server.py} --port $port --static-dir . --holds "$PWD/held-packages.json" \
+          --cli ${lib.getExe nix-detour} 2>server.log &
+        trap 'kill $!' EXIT
+        for _ in $(seq 100); do curl -sf -o /dev/null $url/api/data && break; sleep 0.1; done
+        # HTTP status of a POST to $1, the rest are curl's arguments; the body goes to resp.json.
+        post() {
+          local path="$1"
+          shift
+          curl -s -o resp.json -w '%{http_code}' -X POST "$url$path" "$@"
+        }
+        json=(-H 'Content-Type: application/json')
+        hold='{"name":"foo","kind":"hold","entry":{"from":"stable","reason":"r"}}'
+
+        test "$(post /api/detour "''${json[@]}" -H "Origin: $url" -d "$hold")" = 200
+        test "$(jq -c '.foo | [.from, .reason]' held-packages.json)" = '["stable","r"]'
+        # The CLI checks the fix; its error comes back.
+        test "$(post /api/detour "''${json[@]}" -d '{"name":"bar","kind":"fix","entry":{"from":"current","reason":"r","patches":["nope.patch"]}}')" = 400
+        jq -e '.error | test("nope.patch is not a file")' resp.json
+        test "$(jq -r 'has("bar")' held-packages.json)" = false
+
+        # Requests from other sites.
+        test "$(post /api/detour -H 'Content-Type: text/plain' -d "$hold")" = 403
+        test "$(post /api/detour "''${json[@]}" -H 'Origin: http://evil.example' -d "$hold")" = 403
+        test "$(post /api/release "''${json[@]}" -H 'Host: evil.example' -d '{"name":"foo"}')" = 403
+        test "$(curl -s -o /dev/null -w '%{http_code}' -H 'Host: evil.example' $url/api/data)" = 403
+        test "$(jq -r 'has("foo")' held-packages.json)" = true
+
+        test "$(post /api/release "''${json[@]}" -d '{"name":"foo","kind":"hold"}')" = 200
+        test "$(jq -r 'has("foo")' held-packages.json)" = false
+        touch $out
+      '';
+
   # The fix's patch applies and the package builds with it.
   fix-builds = fixedPkgs.hello;
 

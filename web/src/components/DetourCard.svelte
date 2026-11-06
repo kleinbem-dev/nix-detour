@@ -16,15 +16,19 @@
   let copiedCommand = $state(false);
   let prStatus = $state<PrStatusInfo | null>(null);
 
+  // A number, not the item: the list rebuilds every item on each data change,
+  // and the status is fetched again only when the PR changes.
+  const prNumber = $derived(item.kind === 'pr' ? item.prNumber : undefined);
+
   $effect(() => {
     prStatus = null;
-    if (item.kind === 'pr' && item.prNumber) {
+    if (prNumber) {
       const controller = new AbortController();
-      const currentPr = item.prNumber;
+      const currentPr = prNumber;
       fetch(`/api/pr-status?pr=${currentPr}`, { signal: controller.signal })
         .then((r) => (r.ok ? r.json() : null))
         .then((data: PrStatusInfo | null) => {
-          if (data && item.prNumber === currentPr) {
+          if (data) {
             prStatus = data;
             onStatusUpdate?.(currentPr, data);
           }

@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { DetourItem } from '../types';
-  import { generateCliCommand } from '../utils';
+  import { dialogFocus, generateCliCommand } from '../utils';
 
   interface Props {
     item: DetourItem;
@@ -37,10 +37,15 @@
   <div
     class="relative w-full max-w-2xl bg-stone-900 border border-stone-700/80 rounded-2xl shadow-2xl p-6 overflow-hidden max-h-[90vh] flex flex-col"
     onclick={(e) => e.stopPropagation()}
-    onkeydown={(e) => e.stopPropagation()}
+    onkeydown={(e) => {
+      if (e.key === 'Escape') onClose();
+      e.stopPropagation();
+    }}
+    use:dialogFocus
     role="dialog"
     tabindex="-1"
     aria-modal="true"
+    aria-labelledby="detail-modal-title"
   >
     <!-- Modal Header -->
     <div class="flex items-start justify-between pb-4 border-b border-stone-800">
@@ -56,7 +61,7 @@
             <span class="text-xs text-stone-400 font-mono">Since {item.since} ({item.ageDays}d)</span>
           {/if}
         </div>
-        <h2 class="text-2xl font-mono font-bold text-stone-100">{item.name}</h2>
+        <h2 id="detail-modal-title" class="text-2xl font-mono font-bold text-stone-100">{item.name}</h2>
       </div>
 
       <button

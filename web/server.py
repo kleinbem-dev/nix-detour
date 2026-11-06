@@ -4,7 +4,9 @@ import http.server
 import json
 import logging
 import os
+import shutil
 import subprocess
+import threading
 import time
 import urllib.parse
 import urllib.request
@@ -17,6 +19,7 @@ parser.add_argument("--static-dir", type=str, default="", help="Directory with b
 parser.add_argument("--data-dir", type=str, default="", help="Directory containing held-packages.json and nixpkgs-prs.json")
 parser.add_argument("--holds", type=str, default="", help="Path to held-packages.json")
 parser.add_argument("--prs", type=str, default="", help="Path to nixpkgs-prs.json")
+parser.add_argument("--cli", type=str, default="", help="The nix-detour CLI, which adds holds and fixes (default: from PATH)")
 
 args, unknown = parser.parse_known_args()
 
@@ -24,9 +27,13 @@ args, unknown = parser.parse_known_args()
 PORT = int(args.port_pos) if args.port_pos and args.port_pos.isdigit() else args.port
 STATIC_DIR = args.static_dir_pos if args.static_dir_pos else (args.static_dir or os.path.join(os.path.dirname(__file__), "dist"))
 
+CLI = args.cli or shutil.which("nix-detour")
+
 log = logging.getLogger("nix-detour")
 
 PR_CACHE = {}
+# Request threads write the same holds and PR files: one at a time.
+FILE_LOCK = threading.Lock()
 CACHE_TTL = 60
 
 
@@ -184,6 +191,39 @@ def fetch_pr_status(pr_number, upstream="NixOS/nixpkgs", channel="nixos-unstable
     return result
 
 
+def hold_add_argv(name, kind, entry, target):
+    """The CLI call that adds a hold or fix, so it pins revisions and patch URLs by their hash."""
+    src = entry.get("from", "current")
+    if isinstance(src, dict):
+        src = src.get("rev", "")
+    if not isinstance(src, str) or not src:
+        raise ValueError("from must be stable, current or a nixpkgs revision")
+    argv = [CLI, "fix" if kind == "fix" else "hold", "add", name, "--file", target, "--from", src]
+    options = {
+        "reason": "--reason",
+        "link": "--link",
+        "releaseWhen": "--release-when",
+        "untilVersion": "--until-version",
+        "override": "--override",
+    }
+    for key, flag in options.items():
+        value = entry.get(key)
+        if value:
+            if not isinstance(value, str):
+                raise ValueError(f"{key} must be a string")
+            argv += [flag, value]
+    tests = entry.get("tests") or []
+    if tests:
+        argv += ["--tests", ",".join(str(t) for t in tests)]
+    for patch in entry.get("patches") or []:
+        if isinstance(patch, dict):
+            patch = patch.get("url", "")
+        if not isinstance(patch, str) or not patch:
+            raise ValueError("a patch must be a URL or a file next to the holds file")
+        argv += ["--patch", patch]
+    return argv
+
+
 class DetourHandler(http.server.SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=STATIC_DIR, **kwargs)
@@ -198,6 +238,32 @@ class DetourHandler(http.server.SimpleHTTPRequestHandler):
             self.send_header("Pragma", "no-cache")
             self.send_header("Expires", "0")
         super().end_headers()
+
+    def _allowed_hosts(self):
+        port = self.server.server_port
+        return {f"127.0.0.1:{port}", f"localhost:{port}"}
+
+    def _forbidden(self, post):
+        """Requests from other sites: a DNS-rebound Host, a foreign Origin, or a
+        form-style POST that skips the CORS preflight."""
+        hosts = self._allowed_hosts()
+        if self.headers.get("Host", "") not in hosts:
+            return True
+        if not post:
+            return False
+        origin = self.headers.get("Origin")
+        if origin and origin not in {f"http://{h}" for h in hosts}:
+            return True
+        ctype = self.headers.get("Content-Type", "").split(";")[0].strip().lower()
+        return ctype != "application/json"
+
+    def _send_json(self, status, obj):
+        data = json.dumps(obj).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
 
     def _handle_api_get(self, send_body=True):
         """Handle GET and HEAD requests for API endpoints."""
@@ -258,7 +324,7 @@ class DetourHandler(http.server.SimpleHTTPRequestHandler):
             return True
 
         if parsed_url.path == "/api/pr-statuses":
-            cached = {k: v[1] for k, v in PR_CACHE.items()}
+            cached = {k: v[1] for k, v in list(PR_CACHE.items())}
             data = json.dumps(cached).encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
@@ -272,81 +338,111 @@ class DetourHandler(http.server.SimpleHTTPRequestHandler):
 
     def do_GET(self):
         """Handle HTTP GET requests for API routes and static assets."""
+        if self._forbidden(post=False):
+            self.send_response(403)
+            self.end_headers()
+            return
         if self._handle_api_get(send_body=True):
             return
         super().do_GET()
 
     def do_HEAD(self):
         """Handle HTTP HEAD requests for API routes and static assets."""
+        if self._forbidden(post=False):
+            self.send_response(403)
+            self.end_headers()
+            return
         if self._handle_api_get(send_body=False):
             return
         super().do_HEAD()
 
     def do_POST(self):
+        if self._forbidden(post=True):
+            self.send_response(403)
+            self.end_headers()
+            return
         length = int(self.headers.get("Content-Length", 0))
         body = self.rfile.read(length) if length > 0 else b"{}"
         try:
             payload = json.loads(body.decode("utf-8"))
         except Exception:
             payload = {}
+        if not isinstance(payload, dict):
+            payload = {}
 
         if self.path == "/api/detour":
             name = payload.get("name")
             kind = payload.get("kind")
             entry = payload.get("entry")
-            if not name or not entry:
+            if not isinstance(name, str) or not name or not isinstance(entry, dict):
                 self.send_response(400)
                 self.end_headers()
                 return
 
             target, _ = resolve_file(args.prs if kind == "pr" else args.holds, "nixpkgs-prs.json" if kind == "pr" else "held-packages.json")
-            cur = {}
-            if os.path.exists(target):
+            if kind != "pr":
+                if not CLI:
+                    self._send_json(501, {"ok": False, "error": "adding holds needs the nix-detour CLI: run `nix-detour web`"})
+                    return
                 try:
-                    with open(target, "r") as f:
-                        cur = json.load(f)
-                except Exception:
-                    cur = {}
-            cur[name] = entry
-            with open(target, "w") as f:
-                json.dump(cur, f, indent=2)
-                f.write("\n")
+                    argv = hold_add_argv(name, kind, entry, target)
+                except ValueError as e:
+                    self._send_json(400, {"ok": False, "error": str(e)})
+                    return
+                # Prefetching a nixpkgs revision takes a while.
+                try:
+                    with FILE_LOCK:
+                        res = subprocess.run(argv, cwd=os.path.dirname(target), capture_output=True, text=True, timeout=900, check=False)
+                except subprocess.TimeoutExpired:
+                    self._send_json(500, {"ok": False, "error": "nix-detour timed out"})
+                    return
+                if res.returncode != 0:
+                    self._send_json(400, {"ok": False, "error": res.stderr.strip() or f"nix-detour exited with {res.returncode}"})
+                    return
+                self._send_json(200, {"ok": True})
+                return
 
-            resp = json.dumps({"ok": True}).encode("utf-8")
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(resp)))
-            self.end_headers()
-            self.wfile.write(resp)
+            with FILE_LOCK:
+                cur = {}
+                if os.path.exists(target):
+                    try:
+                        with open(target, "r") as f:
+                            cur = json.load(f)
+                    except Exception:
+                        cur = {}
+                cur[name] = entry
+                with open(target, "w") as f:
+                    json.dump(cur, f, indent=2)
+                    f.write("\n")
+
+            self._send_json(200, {"ok": True})
             return
 
         if self.path == "/api/release":
             name = payload.get("name")
             kind = payload.get("kind")
-            if not name:
+            if not isinstance(name, str) or not name:
                 self.send_response(400)
                 self.end_headers()
                 return
 
             target, _ = resolve_file(args.prs if kind == "pr" else args.holds, "nixpkgs-prs.json" if kind == "pr" else "held-packages.json")
-            if os.path.exists(target):
-                try:
-                    with open(target, "r") as f:
-                        cur = json.load(f)
-                    if name in cur:
-                        del cur[name]
-                        with open(target, "w") as f:
-                            json.dump(cur, f, indent=2)
-                            f.write("\n")
-                except Exception as e:
-                    log.warning("could not release %r from %s: %s", name, target, e)
+            with FILE_LOCK:
+                if os.path.exists(target):
+                    try:
+                        with open(target, "r") as f:
+                            cur = json.load(f)
+                        if name in cur:
+                            del cur[name]
+                            with open(target, "w") as f:
+                                json.dump(cur, f, indent=2)
+                                f.write("\n")
+                    except Exception as e:
+                        log.warning("could not release %r from %s: %s", name, target, e)
+                        self._send_json(500, {"ok": False, "error": f"could not update {target}: {e}"})
+                        return
 
-            resp = json.dumps({"ok": True}).encode("utf-8")
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(resp)))
-            self.end_headers()
-            self.wfile.write(resp)
+            self._send_json(200, {"ok": True})
             return
 
         self.send_response(404)
@@ -355,7 +451,8 @@ class DetourHandler(http.server.SimpleHTTPRequestHandler):
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
-    server = http.server.HTTPServer(("127.0.0.1", PORT), DetourHandler)
+    # Threads: adding a hold can prefetch nixpkgs for minutes.
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", PORT), DetourHandler)
     print(f"Serving nix-detour dashboard at http://127.0.0.1:{PORT}")
     try:
         server.serve_forever()

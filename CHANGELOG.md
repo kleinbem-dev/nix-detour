@@ -32,6 +32,12 @@
   nixos-unstable. CLI: `nix-detour fix add NAME --patch … | --override …`
   (and `--patch`, `--override`, `--from current` on `hold add`).
 
+- Web dashboard: holds and fixes are added through the CLI, so a nixpkgs
+  revision and patch URLs are pinned by hash (they were saved without one,
+  and evaluation failed). The server refuses requests from other sites, and
+  the dashboard says when saving or releasing fails. Imported data stays in
+  the page instead of writing to the local files.
+
 ## 0.3.1 (2026-11-01)
 
 - Update action with `holds-repo`: the holds repository is cloned at the
