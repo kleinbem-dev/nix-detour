@@ -60,3 +60,5 @@ runs:
         🤖 Opened by the nix-detour pr merged action." "$PRS"
           fi
         done
+        # Later steps see the file as it is on the branch.
+        git checkout -- "$PRS"

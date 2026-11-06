@@ -3,7 +3,7 @@
 #
 # Builds FLAKE's releaseChecks.<system>.* with its nixpkgs set to CHANNEL. Prints
 # "release <name>" for each that builds, else "held <name> [<days since>]".
-set -uo pipefail
+set -euo pipefail
 
 flake="$1" channel="$2"
 system=$(nix eval --raw --impure --expr builtins.currentSystem)
@@ -30,7 +30,10 @@ fi
 for name in "${names[@]}"; do
   since=$(jq -r --arg n "$name" '.[$n].since // empty' <<<"$holds")
   days=""
-  [[ -z $since ]] || days=$(((today - $(date -u -d "$since" +%s)) / 86400))
+  # A malformed date leaves the age out instead of stopping the check.
+  if [[ -n $since ]] && start=$(date -u -d "$since" +%s 2>/dev/null); then
+    days=$(((today - start) / 86400))
+  fi
   if nix build --no-link "$flake#releaseChecks.$system.\"$name\"" --override-input nixpkgs "$channel" >&2; then
     echo "release $name"
   else

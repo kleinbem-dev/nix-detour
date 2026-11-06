@@ -9,6 +9,19 @@
   404 still counts as broken. On 2026-11-02 a 502 from a binary cache
   would otherwise have been reported as a package to hold.
 
+- Update action: commit mode commits only onto the PR head it checked; a
+  push to the branch during the run fails the commit instead of putting
+  holds checked on the old lock onto the new one. The previous nixpkgs comes
+  from the `flake` directory's flake.lock (it was the repository root's),
+  and the token falls back to the workflow's, so report mode can clone a
+  public `holds-repo` without one.
+
+- pr-pin action: `rev` must be a full commit SHA. pr-merged action: the PRs
+  file is left as it is on the branch for later steps. The actions' commits
+  work on macOS runners too.
+
+- `hold check`: a hold with a malformed `since` is still checked.
+
 - PRs: an entry's `pythonPackages` go into every Python package set (from
   `pkgs/development/python-modules/<name>`, or `paths."python3Packages.<name>"`),
   finding the entry's own packages first. A scope from `paths` (a

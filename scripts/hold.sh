@@ -24,7 +24,8 @@ case $BUILD in
 esac
 
 git fetch -q --depth 1 origin "$BASE" || { echo "cannot fetch $BASE from origin (is this a git checkout of the repository?)" >&2; exit 1; }
-base_lock=$(git show FETCH_HEAD:flake.lock) || { echo "$BASE has no flake.lock" >&2; exit 1; }
+# ./ makes the path relative to this directory, like FLAKE.
+base_lock=$(git show "FETCH_HEAD:./${FLAKE%/}/flake.lock") || { echo "$BASE has no $FLAKE/flake.lock" >&2; exit 1; }
 jq -e . <<<"$base_lock" >/dev/null || { echo "$BASE's flake.lock is not valid JSON" >&2; exit 1; }
 previous=$(jq -er --arg i "$INPUT" '.nodes[.nodes.root.inputs[$i]].locked.rev' <<<"$base_lock") \
   || { echo "no input $INPUT in $BASE's flake.lock" >&2; exit 1; }
