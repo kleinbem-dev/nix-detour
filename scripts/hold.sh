@@ -49,7 +49,7 @@ if [[ -n $holds_repo ]]; then
   [[ -z $holds_file ]] || HOLDS="$clone/$holds_file"
 fi
 
-held=() failed=() unchecked=()
+held=() failed=() unchecked=() unverified=()
 checked=false
 if [[ -e $HOLDS ]]; then
   checked=true
@@ -58,6 +58,13 @@ fi
 
 round="$results"
 for n in 1 2 3 4 5 6; do
+  # Held last round, but a download failed this time: not shown to work held.
+  while read -r name; do
+    if [[ -z $name ]] || ! has "$name" "${held[@]}"; then continue; fi
+    mapfile -t held < <(printf '%s\n' "${held[@]}" | grep -vxF -- "$name" || true)
+    "${cli[@]}" hold remove "$name" --file "$HOLDS"
+    unverified+=("$name")
+  done < <(awk '$1 == "unavailable" {print $2}' "$round" | sort -u)
   mapfile -t names < <(awk '$1 == "broken" {print $2}' "$round" | sort -u)
   new=()
   for name in "${names[@]}"; do
@@ -96,7 +103,7 @@ for n in 1 2 3 4 5 6; do
 done
 mapfile -t unattributed < <(awk '$1 == "unattributed" {print $2}' "$round" | sort -u)
 # A download failed (cache or network down): no hold, the next run checks again.
-mapfile -t unavailable < <(awk '$1 == "unavailable" {print $2}' "$round" | sort -u)
+mapfile -t unavailable < <({ awk '$1 == "unavailable" {print $2}' "$round"; printf '%s\n' "${unverified[@]}"; } | grep -v '^$' | sort -u)
 
 # With HOLDS_REPO, the clone is at the revision the lock has. A hold that the
 # holds repository has by now needs a lock update of HOLDS_INPUT, not a new
@@ -168,7 +175,7 @@ line() {
     echo "Not checked, a download failed (the cache or network, not this update):"
     echo
     for name in "${unavailable[@]}"; do
-      echo "- \`$name\`: $(awk -v n="$name" '$1 == "unavailable" && $2 == n {$1 = $2 = ""; sub(/^ +/, ""); print; exit}' "$round")"
+      echo "- \`$name\`: $(awk -v n="$name" '$1 == "unavailable" && $2 == n {$1 = $2 = ""; sub(/^ +/, ""); print; exit}' "$all")"
     done
     echo
   fi
