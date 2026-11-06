@@ -95,6 +95,19 @@ let
         attrs = [ "custom-pkg" ];
         paths.custom-pkg = "pkgs/development/custom-pkg/default.nix";
       };
+      # A scope and a Python package that needs a package of its PR.
+      platform = {
+        pr = 4;
+        attrs = [
+          "fake-lib"
+          "fake-plugins"
+        ];
+        paths.fake-plugins = "pkgs/development/fake-plugins/default.nix";
+        pythonPackages = [
+          "fake-py"
+          "fake-py-user"
+        ];
+      };
     };
   };
   withPrs = import nixpkgs {
@@ -231,7 +244,72 @@ let
         custom = false;
         fake = false;
         old-hello = true;
+        platform = false;
       };
+    };
+    testPrScopeInOverlay = {
+      expr = withPrs.fake-plugins.one.version;
+      expected = "1.0";
+    };
+    testPrPythonInEveryPythonSet = {
+      expr = map (python: python.pkgs.fake-py.text) [
+        withPrs.python3
+        withPrs.python313
+      ];
+      expected = map (python: "${python.pythonVersion} ${withPrs.fake-lib}") [
+        withPrs.python3
+        withPrs.python313
+      ];
+    };
+    # The tools evaluate each check package's drvPath, so a scope's packages
+    # are listed one by one.
+    testPrChecksListDerivations = {
+      expr = builtins.attrNames prChecks.platform.packages;
+      expected = [
+        "fake-lib"
+        "fake-plugins.one"
+        "python3Packages.fake-py"
+        "python3Packages.fake-py-user"
+      ];
+    };
+    # A Python package of the PR that needs another one, in the overlay and
+    # in the checks, as real derivations of a Python set.
+    testPrPythonFindsItsSibling = {
+      expr = map (p: (builtins.tryEval p.drvPath).success) [
+        withPrs.python3Packages.fake-py-user
+        prChecks.platform.packages."python3Packages.fake-py-user"
+      ];
+      expected = [
+        true
+        true
+      ];
+    };
+    testPrPythonSiblingResolved = {
+      expr = prChecks.platform.packages."python3Packages.fake-py-user".text;
+      expected = "${prChecks.platform.packages."python3Packages.fake-py"}";
+    };
+    testPrPythonCheckUsesItsPr = {
+      expr = prChecks.platform.packages."python3Packages.fake-py".text;
+      expected = "${pkgs.python3.pythonVersion} ${prChecks.platform.packages.fake-lib}";
+    };
+    testPrDuplicatePythonRefused = {
+      expr =
+        (builtins.tryEval
+          (mkPrs {
+            fetch = _: ./fake-pr;
+            prs = {
+              a = {
+                attrs = [ ];
+                pythonPackages = [ "fake-py" ];
+              };
+              b = {
+                attrs = [ ];
+                pythonPackages = [ "fake-py" ];
+              };
+            };
+          }).overlay
+        ).success;
+      expected = false;
     };
     testPrCheckCarriesEntry = {
       expr = prChecks.fake.nixPrs.pr;

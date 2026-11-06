@@ -25,7 +25,18 @@ let
     else
       "${src}/pkgs/by-name/${lib.substring 0 2 name}/${name}/package.nix";
 
+  pythonPath =
+    entry: src: name:
+    let
+      key = "python3Packages.${name}";
+    in
+    if entry ? paths && entry.paths ? ${key} then
+      "${src}/${entry.paths.${key}}"
+    else
+      "${src}/pkgs/development/python-modules/${name}/default.nix";
+
   allAttrs = lib.concatMap (entry: entry.attrs) (lib.attrValues entries);
+  allPython = lib.concatMap (entry: entry.pythonPackages or [ ]) (lib.attrValues entries);
   allModules = lib.concatMap (entry: lib.attrNames (entry.modules or { })) (lib.attrValues entries);
 
   # One entry's attributes, from pkgs. Each entry gets its own scope, so
@@ -46,15 +57,60 @@ let
     lib.getAttrs entry.attrs scope;
 
   packages = pkgs: lib.concatMapAttrs (_: packagesOf pkgs) entries;
+
+  # An entry's Python packages, from a Python package set. Arguments that the
+  # entry's own packages provide (a library the bindings load, say) come from
+  # them, the rest from the Python set.
+  pythonPackagesOf =
+    python: ours: entry:
+    let
+      src = fetch entry;
+    in
+    lib.genAttrs (entry.pythonPackages or [ ]) (
+      name:
+      let
+        path = pythonPath entry src name;
+      in
+      python.callPackage path (lib.intersectAttrs (lib.functionArgs (import path)) ours)
+    );
+
+  # The derivations of a set of packages, a scope's as `<scope>.<name>`, so the
+  # tools can evaluate and build each one.
+  derivations =
+    set:
+    lib.concatMapAttrs (
+      name: value:
+      if lib.isDerivation value then
+        { ${name} = value; }
+      else
+        lib.mapAttrs' (sub: lib.nameValuePair "${name}.${sub}") (
+          lib.filterAttrs (_: lib.isDerivation) value
+        )
+    ) set;
 in
 assert lib.assertMsg (lib.allUnique allAttrs) "nix-detour prs: an attribute is in two entries";
 assert lib.assertMsg (lib.allUnique allModules) "nix-detour prs: a module name is in two entries";
+assert lib.assertMsg (lib.allUnique allPython) "nix-detour prs: a Python package is in two entries";
 {
   inherit entries packages;
 
   # Every entry's packages, built against the package set the overlay is
   # applied to.
-  overlay = final: _prev: packages final;
+  # Python packages go into every Python package set, and find the entries'
+  # other packages in the overlaid set.
+  overlay =
+    final: prev:
+    packages final
+    // lib.optionalAttrs (allPython != [ ]) {
+      pythonPackagesExtensions = prev.pythonPackagesExtensions ++ [
+        (
+          pyfinal: _:
+          lib.concatMapAttrs (
+            _: entry: pythonPackagesOf pyfinal (lib.getAttrs entry.attrs final) entry
+          ) entries
+        )
+      ];
+    };
 
   # Without meta.doc: the manual build rejects chapters missing from nixpkgs'
   # redirects.json. Wrappers keep the function's argument names, since the module
@@ -87,14 +143,32 @@ assert lib.assertMsg (lib.allUnique allModules) "nix-detour prs: a module name i
       _: entry:
       let
         ours = packagesOf pkgs entry;
+        # The entry's Python packages in a Python set that has all of them, as
+        # the overlay's does, so they find each other.
+        pythonSet =
+          let
+            python = pkgs.python3.override {
+              self = python;
+              packageOverrides = pyfinal: _: pythonPackagesOf pyfinal ours entry;
+            };
+          in
+          python.pkgs;
+        python = lib.mapAttrs' (name: lib.nameValuePair "python3Packages.${name}") (
+          lib.getAttrs (entry.pythonPackages or [ ]) pythonSet
+        );
+        all = derivations ours // python;
+        # Whether nixpkgs has the package at this attribute path, in the same or
+        # a newer version.
         inNixpkgs =
-          attr:
-          pkgs ? ${attr}
-          && builtins.compareVersions (pkgs.${attr}.version or "") (ours.${attr}.version or "") >= 0;
+          path:
+          let
+            theirs = lib.attrByPath (lib.splitString "." path) null pkgs;
+          in
+          theirs != null && builtins.compareVersions (theirs.version or "") (all.${path}.version or "") >= 0;
       in
       {
-        packages = ours;
-        merged = lib.all inNixpkgs entry.attrs;
+        packages = all;
+        merged = lib.all inNixpkgs (lib.attrNames all);
         nixPrs = entry;
       }
     ) entries;

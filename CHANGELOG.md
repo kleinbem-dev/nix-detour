@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- PRs: an entry's `pythonPackages` go into every Python package set (from
+  `pkgs/development/python-modules/<name>`, or `paths."python3Packages.<name>"`),
+  finding the entry's own packages first. A scope from `paths` (a
+  `makeScope` like `mesh-llmPlugins`) works as before, and the checks now
+  list its packages one by one (`<scope>.<name>`), so `pr eval` and
+  `merged` cover each of them.
+
 - Update action: `build: fetches` builds only the fixed-output derivations
   (sources, vendored dependencies) of the watched packages no substituter
   has. A hash mismatch never shows in an evaluation; this finds it without
