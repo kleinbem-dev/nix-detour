@@ -272,7 +272,7 @@
       <button
         type="button"
         onclick={copyCliCommand}
-        title="Copy CLI release command (`nix-detour release {item.name}`)"
+        title={`Copy CLI release command (\`nix-detour release ${item.name}\`)`}
         class="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-stone-800/80 hover:bg-stone-700/80 text-stone-300 border border-stone-700/60 font-mono text-[11px] transition cursor-pointer"
       >
         {#if copiedCommand}
