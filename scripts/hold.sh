@@ -95,6 +95,8 @@ for n in 1 2 3 4 5 6; do
   printf '%s\n' "$output" | tee "$round" >>"$all"
 done
 mapfile -t unattributed < <(awk '$1 == "unattributed" {print $2}' "$round" | sort -u)
+# A download failed (cache or network down): no hold, the next run checks again.
+mapfile -t unavailable < <(awk '$1 == "unavailable" {print $2}' "$round" | sort -u)
 
 # With HOLDS_REPO, the clone is at the revision the lock has. A hold that the
 # holds repository has by now needs a lock update of HOLDS_INPUT, not a new
@@ -162,7 +164,15 @@ line() {
     done
     echo
   fi
-  ((${#held[@]} + ${#ahead[@]} + ${#unchecked[@]} + ${#failed[@]} + ${#unattributed[@]})) || echo "Nothing fails."
+  if ((${#unavailable[@]})); then
+    echo "Not checked, a download failed (the cache or network, not this update):"
+    echo
+    for name in "${unavailable[@]}"; do
+      echo "- \`$name\`: $(awk -v n="$name" '$1 == "unavailable" && $2 == n {$1 = $2 = ""; sub(/^ +/, ""); print; exit}' "$round")"
+    done
+    echo
+  fi
+  ((${#held[@]} + ${#ahead[@]} + ${#unchecked[@]} + ${#failed[@]} + ${#unattributed[@]} + ${#unavailable[@]})) || echo "Nothing fails."
 } >"$RUNNER_TEMP/report.md"
 cat "$RUNNER_TEMP/report.md" >>"$GITHUB_STEP_SUMMARY"
 
@@ -191,6 +201,7 @@ fi
   # In report mode, "held" means "to hold".
   if [[ $MODE == commit ]]; then echo "held=${held[*]}"; else echo "held=$(echo "${held[*]} ${unchecked[*]}" | xargs)"; fi
   echo "failed=$(echo "${failed[*]} ${unattributed[*]}" | xargs)"
+  echo "unavailable=${unavailable[*]}"
   echo "report<<NIX_DETOUR_REPORT"
   cat "$RUNNER_TEMP/report.md"
   echo "NIX_DETOUR_REPORT"

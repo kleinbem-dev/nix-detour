@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Update action: a failed download is not a broken package. Builds use
+  `--fallback`, a failed build is retried once on its own, and one that
+  still fails on a network error (a 5xx or 429 from a cache or source,
+  DNS, connect, timeout) is reported as `unavailable` and never held. A
+  404 still counts as broken. On 2026-11-02 a 502 from a binary cache
+  would otherwise have been reported as a package to hold.
+
 - PRs: an entry's `pythonPackages` go into every Python package set (from
   `pkgs/development/python-modules/<name>`, or `paths."python3Packages.<name>"`),
   finding the entry's own packages first. A scope from `paths` (a

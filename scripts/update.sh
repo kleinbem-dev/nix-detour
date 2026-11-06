@@ -7,7 +7,8 @@
 # hash shows); for each failing nixDetourTargets target, the innermost derivation
 # in the trace that fails on its own in pkgs (one per target and run).
 #
-# Prints "broken <name> <reason>", "unattributed <target> <reason>" and
+# Prints "broken <name> <reason>", "unavailable <name> <reason>" (a download
+# failed: says nothing about the update), "unattributed <target> <reason>" and
 # "ok <system> <count>". NIX_DETOUR_ARGS and NIX_DETOUR_OVERRIDE go to every flake
 # eval and build; NIX_DETOUR_SYSTEMS (default: this one) are evaluated, only this
 # one built.
@@ -45,6 +46,15 @@ innermost() {
     END { print last }' | sed -E 's| in /nix/store/[^ ]+||' | cut -c1-300
 }
 
+# The first network error in nix's log $1: a download that failed, not a
+# broken package. Only errors count (nix warns on every retry), and a 404 is
+# not one of them: that source is gone.
+network_error() {
+  sed 's/\x1b\[[0-9;]*m//g' "$1" | grep -m1 -oE \
+    "error: unable to download '[^']+': (HTTP error (429|5[0-9][0-9])|Could not|Couldn't|Timeout|Failed to connect|SSL|Recv failure|Empty reply)[^;]*|curl: \((6|7|28|35|52|56)\)[^;]*|curl: \(22\) The requested URL returned error: (429|5[0-9][0-9])" |
+    cut -c1-200
+}
+
 # Builds only the fixed-output derivations among $tobuild (fetches, vendored
 # dependencies) and reports each watched package in "${mine[@]}" that needs
 # one that fails. Nothing else of the package is built.
@@ -58,33 +68,45 @@ build_fetches() {
   mapfile -t fods < <(jq -r '(.derivations // .) | to_entries[] | select(.value.outputs.out.hash != null) | .key | sub(".*/"; "")' <<<"$shown")
   ((${#fods[@]})) || return 0
   fods=("${fods[@]/#//nix/store/}")
-  nix build "${extra[@]}" --no-link --keep-going "${fods[@]/%/^*}" 2>&1 | tee "$tmp/fetch.log" >&2
+  nix build "${extra[@]}" --fallback --no-link --keep-going "${fods[@]/%/^*}" 2>&1 | tee "$tmp/fetch.log" >&2
   : >"$tmp/failed"
+  : >"$tmp/unavailable"
   for fod in "${fods[@]}"; do
     # shellcheck disable=SC2046  # one output path
     nix-store --check-validity $(nix-store -q --outputs "$fod") 2>/dev/null && continue
     name=${fod#/nix/store/*-}
     name=${name%.drv}
+    # Once more on its own: a download that failed once is not a broken fetch.
+    nix build "${extra[@]}" --fallback --no-link "$fod^*" >"$tmp/one.log" 2>&1 && continue
+    cat "$tmp/one.log" >&2
     # nix's own error has the hash a fix needs.
-    why=$(awk -v d="$fod" 'index($0, "hash mismatch in fixed-output derivation") && index($0, d) { hit = 1 }
-      hit && /got:/ { print $NF; exit }' "$tmp/fetch.log")
+    why=$(awk 'index($0, "hash mismatch in fixed-output derivation") { hit = 1 }
+      hit && /got:/ { print $NF; exit }' "$tmp/one.log")
     if [[ -n $why ]]; then
-      why="hash mismatch in $name (got $why)"
+      printf '%s\t%s\n' "$fod" "hash mismatch in $name (got $why)" >>"$tmp/failed"
+    elif why=$(network_error "$tmp/one.log") && [[ -n $why ]]; then
+      printf '%s\t%s\n' "$fod" "$name: $why" >>"$tmp/unavailable"
     else
-      why="its fetch $name fails"
+      printf '%s\t%s\n' "$fod" "its fetch $name fails" >>"$tmp/failed"
     fi
-    printf '%s\t%s\n' "$fod" "$why" >>"$tmp/failed"
   done
-  [[ -s $tmp/failed ]] || return 0
+  [[ -s $tmp/failed || -s $tmp/unavailable ]] || return 0
   while read -r name drv; do
     closure=$(nix-store -qR "$drv")
+    # A broken fetch wins over a failed download in the same package.
     while IFS=$'\t' read -r fod why; do
       if grep -qxF "$fod" <<<"$closure"; then
         broken+=("$name")
         echo "broken $name $why"
-        break
+        continue 2
       fi
     done <"$tmp/failed"
+    while IFS=$'\t' read -r fod why; do
+      if grep -qxF "$fod" <<<"$closure"; then
+        echo "unavailable $name $why"
+        continue 2
+      fi
+    done <"$tmp/unavailable"
   done < <(jq -r --arg m "${mine[*]}" '($m | split(" ")) as $set
     | to_entries[] | select(.value != null and (.value.drv | IN($set[]))) | "\(.key) \(.value.drv)"' <<<"$results")
 }
@@ -157,14 +179,20 @@ check() {
         if ((${#mine[@]})) && [[ $build == fetches ]]; then
           build_fetches
         elif ((${#mine[@]})); then
-          nix build "${extra[@]}" --no-link --keep-going "${mine[@]/%/^*}" >&2 || true
-          while read -r name out; do
-            if ! nix path-info "$out" >/dev/null 2>&1; then
+          nix build "${extra[@]}" --fallback --no-link --keep-going "${mine[@]/%/^*}" >&2 || true
+          while read -r name drv out; do
+            nix path-info "$out" >/dev/null 2>&1 && continue
+            # Once more on its own: a download that failed once is not a broken package.
+            nix build "${extra[@]}" --fallback --no-link "$drv^*" >"$tmp/one.log" 2>&1 && continue
+            cat "$tmp/one.log" >&2
+            if why=$(network_error "$tmp/one.log") && [[ -n $why ]]; then
+              echo "unavailable $name $why"
+            else
               broken+=("$name")
               echo "broken $name fails to build"
             fi
           done < <(jq -r --arg m "${mine[*]}" '($m | split(" ")) as $set
-            | to_entries[] | select(.value != null and (.value.drv | IN($set[]))) | "\(.key) \(.value.out)"' <<<"$results")
+            | to_entries[] | select(.value != null and (.value.drv | IN($set[]))) | "\(.key) \(.value.drv) \(.value.out)"' <<<"$results")
         fi
       fi
     fi
