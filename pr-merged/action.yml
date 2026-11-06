@@ -35,6 +35,8 @@ runs:
         PRS: ${{ inputs.prs-file }}
       run: |
         set -euo pipefail
+        incoming="$RUNNER_TEMP/prs.incoming"
+        cp "$PRS" "$incoming"
         awk '$1 == "merged" {print $2}' "$RUNNER_TEMP/prs.txt" | while read -r name; do
           git checkout -- "$PRS"
           if ! jq -e --arg n "$name" 'has($n)' "$PRS" >/dev/null; then
@@ -60,5 +62,5 @@ runs:
         🤖 Opened by the nix-detour pr merged action." "$PRS"
           fi
         done
-        # Later steps see the file as it is on the branch.
-        git checkout -- "$PRS"
+        # Later steps see the file as this step got it.
+        cp "$incoming" "$PRS"

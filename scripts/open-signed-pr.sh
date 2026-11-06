@@ -25,7 +25,7 @@ fi
 additions='[]' deletions='[]'
 for path in "$@"; do
   if [[ -e $path ]]; then
-    # --rawfile: a file's base64 can be longer than one argument may be.
+    # Files, not arguments: a file's base64 can be longer than one argument may be.
     additions=$(jq --arg p "$path" --rawfile c <(base64 <"$path" | tr -d '\n') '. + [{path: $p, contents: $c}]' <<<"$additions")
   else
     deletions=$(jq --arg p "$path" '. + [{path: $p}]' <<<"$deletions")
@@ -34,13 +34,13 @@ done
 
 jq -n \
   --arg repo "$repo" --arg branch "$branch" --arg sha "$main_sha" --arg headline "$title" \
-  --argjson additions "$additions" --argjson deletions "$deletions" \
+  --slurpfile additions <(printf '%s' "$additions") --argjson deletions "$deletions" \
   --arg query 'mutation($input: CreateCommitOnBranchInput!) { createCommitOnBranch(input: $input) { commit { oid } } }' \
   '{query: $query, variables: {input: {
       branch: {repositoryNameWithOwner: $repo, branchName: $branch},
       message: {headline: $headline},
       expectedHeadOid: $sha,
-      fileChanges: {additions: $additions, deletions: $deletions}
+      fileChanges: {additions: $additions[0], deletions: $deletions}
   }}}' | gh api graphql --input - >/dev/null
 
 # Resetting the branch makes it identical to main for an instant, and GitHub

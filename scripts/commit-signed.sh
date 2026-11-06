@@ -19,11 +19,11 @@ done
 
 jq -n \
   --arg repo "$repo" --arg branch "$branch" --arg sha "$head" --arg headline "$headline" \
-  --argjson additions "$additions" \
+  --slurpfile additions <(printf '%s' "$additions") \
   --arg query 'mutation($input: CreateCommitOnBranchInput!) { createCommitOnBranch(input: $input) { commit { oid } } }' \
   '{query: $query, variables: {input: {
       branch: {repositoryNameWithOwner: $repo, branchName: $branch},
       message: {headline: $headline},
       expectedHeadOid: $sha,
-      fileChanges: {additions: $additions}
+      fileChanges: {additions: $additions[0]}
   }}}' | gh api graphql --input - --jq .data.createCommitOnBranch.commit.oid
