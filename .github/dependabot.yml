@@ -6,6 +6,12 @@ updates:
     directory: /web
     schedule:
       interval: weekly
+    ignore:
+      # typescript is aliased to @typescript/typescript6: svelte-check only
+      # accepts TS 5/6. Drop once sveltejs/kit#17537 and
+      # sveltejs/language-tools#3063 ship TS 7 support.
+      - dependency-name: typescript
+        versions: [">= 7"]
     cooldown:
       default-days: 7
       semver-minor-days: 7
