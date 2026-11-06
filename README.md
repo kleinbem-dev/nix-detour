@@ -270,8 +270,9 @@ or a newer version, the entry goes and nixpkgs' package takes over.
 | `owner`, `repo` | where the PR's branch is (your fork) |
 | `rev`, `narHash` | the pinned commit (`nix-detour pr pin`) |
 | `attrs` | the packages to take from the PR (from `pkgs/by-name` by default) |
-| `paths` | optional: custom package paths in the PR, `{"attr": "path/to/package.nix"}` |
+| `paths` | optional: custom package paths in the PR, `{"attr": "path/to/package.nix"}`; a path to a scope (`makeScope`) exports the whole scope |
 | `scope` | optional: packages of the PR that `attrs` need but that stay unexported |
+| `pythonPackages` | optional: Python packages of the PR, added to every Python package set (from `pkgs/development/python-modules/<name>`, or `paths."python3Packages.<name>"`); they find the entry's `attrs` first |
 | `modules` | optional: NixOS modules of the PR, `{ name = path in the PR; }` |
 
 ```nix
