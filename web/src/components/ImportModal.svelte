@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { HoldEntry, PrEntry } from '../types';
+  import { dialogFocus } from '../utils';
 
   interface Props {
     onLoadData: (holds: Record<string, HoldEntry>, prs: Record<string, PrEntry>, sourceName: string) => void;
@@ -15,22 +16,52 @@
   let loading = $state(false);
   let errorMsg = $state('');
 
-  function validateRevisions(
-    records: Record<string, unknown>,
-    kind: 'hold' | 'pr'
-  ): string | null {
+  const isString = (v: unknown) => typeof v === 'string';
+  const isStringList = (v: unknown) => Array.isArray(v) && v.every(isString);
+  const isStringMap = (v: unknown) =>
+    !!v && typeof v === 'object' && !Array.isArray(v) && Object.values(v).every(isString);
+  // Patches are files next to the holds file, or { url, hash }.
+  const isPatch = (v: unknown) =>
+    isString(v) ||
+    (!!v && typeof v === 'object' && isString((v as Record<string, unknown>).url) && isString((v as Record<string, unknown>).hash));
+
+  // The first field the dashboard can't show, as an error message; null when all fit.
+  function validateEntries(records: unknown, kind: 'hold' | 'pr'): string | null {
+    const file = kind === 'pr' ? 'nixpkgs-prs.json' : 'held-packages.json';
+    if (!records || typeof records !== 'object' || Array.isArray(records)) {
+      return `${file} must be a JSON object mapping package names to entries`;
+    }
     for (const [key, value] of Object.entries(records)) {
-      if (!value || typeof value !== 'object') continue;
-      const entry = value as Record<string, unknown>;
-      const from = entry.from;
-      const revision =
-        kind === 'pr'
-          ? entry.rev
-          : from && typeof from === 'object'
-            ? (from as Record<string, unknown>).rev
-            : undefined;
-      if (revision !== undefined && typeof revision !== 'string') {
-        return `${kind} entry "${key}" has a non-string revision`;
+      if (!value || typeof value !== 'object' || Array.isArray(value)) {
+        return `${file} entry "${key}" must be an object`;
+      }
+      const e = value as Record<string, unknown>;
+      const bad = (field: string) => `${kind} entry "${key}" has an invalid ${field}`;
+      const optional = (field: string, ok: (v: unknown) => boolean) => e[field] == null || ok(e[field]);
+      if (kind === 'pr') {
+        if (typeof e.pr !== 'number') return bad('pr');
+        for (const f of ['owner', 'repo', 'rev', 'narHash']) if (!isString(e[f])) return bad(f);
+        if (!isStringList(e.attrs)) return bad('attrs');
+        if (!optional('scope', isStringList)) return bad('scope');
+        if (!optional('paths', isStringMap)) return bad('paths');
+        if (!optional('modules', isStringMap)) return bad('modules');
+        if (!optional('untilChannel', isString)) return bad('untilChannel');
+      } else {
+        const from: unknown = e.from;
+        const fromOk =
+          from == null ||
+          from === 'stable' ||
+          from === 'current' ||
+          (typeof from === 'object' &&
+            !Array.isArray(from) &&
+            isString((from as Record<string, unknown>).rev) &&
+            isString((from as Record<string, unknown>).narHash));
+        if (!fromOk) return bad('from');
+        for (const f of ['since', 'reason', 'link', 'releaseWhen', 'untilVersion', 'override']) {
+          if (!optional(f, isString)) return bad(f);
+        }
+        if (!optional('tests', isStringList)) return bad('tests');
+        if (!optional('patches', (v) => Array.isArray(v) && v.every(isPatch))) return bad('patches');
       }
     }
     return null;
@@ -60,14 +91,9 @@
         prs = await prsRes.json();
       }
 
-      const holdRevErr = validateRevisions(holds, 'hold');
-      if (holdRevErr) {
-        errorMsg = holdRevErr;
-        return;
-      }
-      const prRevErr = validateRevisions(prs, 'pr');
-      if (prRevErr) {
-        errorMsg = prRevErr;
+      const invalid = validateEntries(holds, 'hold') ?? validateEntries(prs, 'pr');
+      if (invalid) {
+        errorMsg = invalid;
         return;
       }
 
@@ -92,16 +118,6 @@
     if (holdsJsonText.trim()) {
       try {
         const raw = JSON.parse(holdsJsonText);
-        if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
-          errorMsg = 'held-packages.json must be a JSON object mapping package names to entries';
-          return;
-        }
-        for (const [k, v] of Object.entries(raw)) {
-          if (!v || typeof v !== 'object') {
-            errorMsg = `held-packages.json entry "${k}" must be an object`;
-            return;
-          }
-        }
         parsedHolds = raw;
       } catch (err: any) {
         errorMsg = `Invalid JSON in held-packages.json: ${err.message}`;
@@ -112,16 +128,6 @@
     if (prsJsonText.trim()) {
       try {
         const raw = JSON.parse(prsJsonText);
-        if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
-          errorMsg = 'nixpkgs-prs.json must be a JSON object mapping package names to entries';
-          return;
-        }
-        for (const [k, v] of Object.entries(raw)) {
-          if (!v || typeof v !== 'object') {
-            errorMsg = `nixpkgs-prs.json entry "${k}" must be an object`;
-            return;
-          }
-        }
         parsedPrs = raw;
       } catch (err: any) {
         errorMsg = `Invalid JSON in nixpkgs-prs.json: ${err.message}`;
@@ -129,14 +135,9 @@
       }
     }
 
-    const holdRevErr = validateRevisions(parsedHolds, 'hold');
-    if (holdRevErr) {
-      errorMsg = holdRevErr;
-      return;
-    }
-    const prRevErr = validateRevisions(parsedPrs, 'pr');
-    if (prRevErr) {
-      errorMsg = prRevErr;
+    const invalid = validateEntries(parsedHolds, 'hold') ?? validateEntries(parsedPrs, 'pr');
+    if (invalid) {
+      errorMsg = invalid;
       return;
     }
 
@@ -159,13 +160,18 @@
   <div
     class="relative w-full max-w-xl bg-stone-900 border border-stone-700/80 rounded-2xl shadow-2xl p-6 overflow-hidden flex flex-col"
     onclick={(e) => e.stopPropagation()}
-    onkeydown={(e) => e.stopPropagation()}
+    onkeydown={(e) => {
+      if (e.key === 'Escape') onClose();
+      e.stopPropagation();
+    }}
+    use:dialogFocus
     role="dialog"
     tabindex="-1"
     aria-modal="true"
+    aria-labelledby="import-modal-title"
   >
     <div class="flex items-center justify-between pb-3 border-b border-stone-800">
-      <h3 class="text-lg font-bold text-stone-100 font-mono">Load / Import Detours</h3>
+      <h3 id="import-modal-title" class="text-lg font-bold text-stone-100 font-mono">Load / Import Detours</h3>
       <button
         type="button"
         onclick={onClose}

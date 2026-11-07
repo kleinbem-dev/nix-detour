@@ -165,7 +165,12 @@
         };
         web = {
           type = "app";
-          program = lib.getExe self.packages.${pkgs.stdenv.hostPlatform.system}.web-server;
+          # Through the CLI, which the server adds holds with.
+          program = toString (
+            pkgs.writeShellScript "nix-detour-web" ''
+              exec ${lib.getExe self.packages.${pkgs.stdenv.hostPlatform.system}.nix-detour} web "$@"
+            ''
+          );
           meta.description = "Run the nix-detour web dashboard";
         };
       });

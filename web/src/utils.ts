@@ -9,6 +9,51 @@ export function calculateAgeDays(sinceStr?: string): number {
   return Math.floor(diffTime / (1000 * 60 * 60 * 24));
 }
 
+const FOCUSABLE =
+  'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+// Svelte action for modal dialogs: focus moves into the dialog, Tab stays in
+// it, the rest of the page is inert, and on close all of that is undone.
+export function dialogFocus(node: HTMLElement) {
+  const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  const madeInert: HTMLElement[] = [];
+  for (let el: HTMLElement | null = node; el && el !== document.body; el = el.parentElement) {
+    for (const sibling of Array.from(el.parentElement?.children ?? [])) {
+      if (sibling !== el && sibling instanceof HTMLElement && !sibling.inert) {
+        sibling.inert = true;
+        madeInert.push(sibling);
+      }
+    }
+  }
+  const onKeydown = (e: KeyboardEvent) => {
+    if (e.key !== 'Tab') return;
+    const items = Array.from(node.querySelectorAll<HTMLElement>(FOCUSABLE));
+    if (items.length === 0) {
+      e.preventDefault();
+      return;
+    }
+    const first = items[0];
+    const last = items[items.length - 1];
+    const active = document.activeElement;
+    if (e.shiftKey && (active === first || active === node)) {
+      e.preventDefault();
+      last.focus();
+    } else if (!e.shiftKey && active === last) {
+      e.preventDefault();
+      first.focus();
+    }
+  };
+  node.addEventListener('keydown', onKeydown);
+  node.focus();
+  return {
+    destroy() {
+      node.removeEventListener('keydown', onKeydown);
+      for (const el of madeInert) el.inert = false;
+      previous?.focus();
+    }
+  };
+}
+
 export function shQuote(val: string): string {
   // Quote safely for POSIX shell using single quotes
   return "'" + val.replace(/'/g, "'\\''") + "'";
