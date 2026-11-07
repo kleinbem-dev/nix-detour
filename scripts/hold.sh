@@ -214,9 +214,15 @@ Found by the nix-detour update action on ${GITHUB_REPOSITORY:-the lock update}."
 fi
 {
   # In report mode, "held" means "to hold".
-  if $commit; then echo "held=${held[*]}"; else echo "held=$(echo "${held[*]} ${unchecked[*]}" | xargs)"; fi
+  if [[ $MODE == commit ]]; then
+    # Only what was committed; nothing when an unverified hold stopped it.
+    if $commit; then echo "held=${held[*]}"; else echo "held="; fi
+  else
+    echo "held=$(echo "${held[*]} ${unchecked[*]}" | xargs)"
+  fi
   echo "failed=$(echo "${failed[*]} ${unattributed[*]}" | xargs)"
   echo "unavailable=${unavailable[*]}"
+  echo "ahead=${ahead[*]}"
   echo "report<<NIX_DETOUR_REPORT"
   cat "$RUNNER_TEMP/report.md"
   echo "NIX_DETOUR_REPORT"
