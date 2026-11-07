@@ -30,9 +30,14 @@ fi
 for name in "${names[@]}"; do
   since=$(jq -r --arg n "$name" '.[$n].since // empty' <<<"$holds")
   days=""
-  # A malformed date leaves the age out instead of stopping the check.
-  if [[ -n $since ]] && start=$(date -u -d "$since" +%s 2>/dev/null); then
-    days=$(((today - start) / 86400))
+  # jq, not date -d: BSD date on macOS runners has no -d. A malformed date
+  # leaves the age out with a warning instead of stopping the check.
+  if [[ -n $since ]]; then
+    if start=$(jq -nr --arg s "$since" '$s | strptime("%Y-%m-%d") | mktime' 2>/dev/null); then
+      days=$(((today - start) / 86400))
+    else
+      echo "::warning::$name: since \"$since\" is not a YYYY-MM-DD date, so its age is unknown" >&2
+    fi
   fi
   if nix build --no-link "$flake#releaseChecks.$system.\"$name\"" --override-input nixpkgs "$channel" >&2; then
     echo "release $name"
