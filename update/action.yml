@@ -40,7 +40,7 @@ inputs:
     description: The branch whose flake.lock has the nixpkgs before the update
     default: main
   branch:
-    description: "The PR branch to commit to (default: the PR's head branch)"
+    description: "The PR branch to commit to (default: the PR's head branch). Outside a pull_request event it must be the checked-out branch, and on one the PR's own"
     default: ""
   systems:
     description: The systems to check, separated by spaces (default the runner's); any system evaluates, only the runner's builds
@@ -110,7 +110,8 @@ runs:
         NIX_DETOUR_SYSTEMS: ${{ inputs.systems }}
         # A GITHUB_TOKEN the workflow set (a PAT, an App token) wins over the default.
         GH_TOKEN: ${{ inputs.token || env.GITHUB_TOKEN || github.token }}
-        # The PR head the holds are computed on: a push meanwhile fails the commit.
+        # The PR head the holds are computed on (the checkout outside a PR
+        # event, see hold.sh): a push meanwhile fails the commit.
         EXPECTED_HEAD: ${{ (inputs.branch == '' || inputs.branch == github.head_ref) && github.event.pull_request.head.sha || '' }}
         MODE: ${{ inputs.mode }}
         FLAKE: ${{ inputs.flake }}

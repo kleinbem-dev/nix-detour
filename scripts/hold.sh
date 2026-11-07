@@ -9,6 +9,7 @@
 #
 # Environment: FLAKE, HOLDS, INPUT, BASE, MODE (commit|report), BRANCH,
 # BUILD (true|fetches|false), NIX_DETOUR_ARGS, GH_TOKEN, HOLDS_REPO, HOLDS_INPUT,
+# EXPECTED_HEAD (default: the checkout's HEAD outside pull_request events),
 # HOLDS_TOKEN; RUNNER_TEMP, GITHUB_OUTPUT, GITHUB_STEP_SUMMARY and
 # GITHUB_REPOSITORY as on GitHub.
 set -euo pipefail
@@ -43,6 +44,18 @@ has() {
 }
 
 holds_repo="${HOLDS_REPO:-}"
+# Commit mode commits only onto the head the holds are computed on: a push
+# meanwhile fails the commit. Outside a pull_request event that is the checkout.
+if [[ ${MODE:-} == commit && -z $holds_repo && -z ${EXPECTED_HEAD:-} ]]; then
+  case ${GITHUB_EVENT_NAME:-} in
+    pull_request*)
+      echo "::error::commit mode on a pull_request event commits only to the PR's own branch, not $BRANCH" >&2
+      exit 1
+      ;;
+  esac
+  EXPECTED_HEAD=$(git rev-parse HEAD)
+  export EXPECTED_HEAD
+fi
 if [[ -n $holds_repo ]]; then
   # Cloned by clone-holds.sh, which also points every check at the clone.
   clone="${NIX_DETOUR_HOLDS_CLONE:?run clone-holds.sh first}"
