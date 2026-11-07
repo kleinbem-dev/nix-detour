@@ -13,7 +13,21 @@ export default defineConfig({
         fallback: 'index.html',
         precompress: false,
         strict: true
-      })
+      }),
+      compilerOptions: {
+        experimental: {
+          async: true
+        },
+        fragments: 'html'
+      },
+      dynamicCompileOptions({ filename }) {
+        if (!filename.includes('node_modules')) {
+          return { runes: true };
+        }
+      },
+      experimental: {
+        forkPreloads: true
+      }
     })
   ]
 });

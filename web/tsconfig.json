@@ -1,14 +1,15 @@
 {
+  "extends": "$app/tsconfig",
   "compilerOptions": {
-    "target": "ESNext",
-    "useDefineForClassFields": true,
-    "module": "ESNext",
-    "resolveJsonModule": true,
-    "allowJs": true,
-    "checkJs": true,
-    "isolatedModules": true,
-    "moduleResolution": "bundler",
-    "strict": true
+    "strict": true,
+    "rootDirs": [
+      ".",
+      "./.svelte-kit/types"
+    ]
   },
-  "include": ["src/**/*.d.ts", "src/**/*.ts", "src/**/*.js", "src/**/*.svelte"]
+  "include": [
+    "src",
+    "test",
+    "*"
+  ]
 }
