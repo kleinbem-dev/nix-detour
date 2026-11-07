@@ -44,16 +44,23 @@ has() {
 }
 
 holds_repo="${HOLDS_REPO:-}"
-# Commit mode commits only onto the head the holds are computed on: a push
-# meanwhile fails the commit. Outside a pull_request event that is the checkout.
-if [[ ${MODE:-} == commit && -z $holds_repo && -z ${EXPECTED_HEAD:-} ]]; then
-  case ${GITHUB_EVENT_NAME:-} in
-    pull_request*)
-      echo "::error::commit mode on a pull_request event commits only to the PR's own branch, not $BRANCH" >&2
-      exit 1
-      ;;
-  esac
-  EXPECTED_HEAD=$(git rev-parse HEAD)
+# Commit mode commits only onto the head the holds are computed on, so the
+# checkout must be that head (on a pull_request event, not the merge commit),
+# and a push meanwhile fails the commit.
+if [[ ${MODE:-} == commit && -z $holds_repo ]]; then
+  checkout=$(git rev-parse HEAD)
+  if [[ -z ${EXPECTED_HEAD:-} ]]; then
+    case ${GITHUB_EVENT_NAME:-} in
+      pull_request*)
+        echo "::error::commit mode on a pull_request event commits only to the PR's own branch, not $BRANCH" >&2
+        exit 1
+        ;;
+    esac
+    EXPECTED_HEAD=$checkout
+  elif [[ $EXPECTED_HEAD != "$checkout" ]]; then
+    echo "::error::the checkout ($checkout) is not the PR head ($EXPECTED_HEAD): check out with ref: \${{ github.event.pull_request.head.sha }}" >&2
+    exit 1
+  fi
   export EXPECTED_HEAD
 fi
 if [[ -n $holds_repo ]]; then

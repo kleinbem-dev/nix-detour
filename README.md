@@ -199,7 +199,10 @@ evaluated, not built.
     token: ${{ secrets.TOKEN }}   # contents write, for the commit
 ```
 
-The holds go to the PR branch as one signed commit; the hold-release action
+Commit mode needs the checkout to be the commit it commits onto: on a
+`pull_request` event check out the PR head (`actions/checkout` with
+`ref: ${{ github.event.pull_request.head.sha }}`), not the merge commit. The
+holds go to the PR branch as one signed commit; the hold-release action
 removes them again once nixos-unstable has the fix. `held`, `failed` and a
 Markdown `report` are outputs, for a PR comment or an issue. `build: false`
 only evaluates (for big closures such as CUDA, where substituters decide);

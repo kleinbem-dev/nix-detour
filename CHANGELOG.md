@@ -9,12 +9,12 @@
   404 still counts as broken. On 2026-11-02 a 502 from a binary cache
   would otherwise have been reported as a package to hold.
 
-- Update action: commit mode commits only onto the head it checked (the
-  PR head on a pull_request event, else the checkout); a push to the branch
-  during the run fails the commit instead of putting holds checked on the
-  old lock onto the new one. A `branch` other than the checked one fails
-  too. With `holds-repo` the holds go into a new PR there, so this check
-  doesn't apply. The previous nixpkgs comes
+- Update action: commit mode commits only onto the commit it checked out,
+  which on a pull_request event must be the PR head (not the merge commit);
+  a push to the branch during the run fails the commit instead of putting
+  holds checked on the old lock onto the new one. The check compares
+  commits: a `branch` whose head is another commit fails. With `holds-repo`
+  the holds go into a new PR there, so this check doesn't apply. The previous nixpkgs comes
   from the `flake` directory's flake.lock (it was the repository root's),
   and the token falls back to the workflow's, so report mode can clone a
   public `holds-repo` without one.
