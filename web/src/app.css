@@ -1,8 +1,8 @@
 @import "tailwindcss";
+@import "@kleinbem/web-config/theme";
+@import "@kleinbem/web-config/base.css";
 
-:root {
-  color-scheme: dark;
-}
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *, .dark, .dark *));
 
 body {
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;

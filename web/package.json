@@ -21,5 +21,8 @@
     "tailwindcss": "^4.3.5",
     "typescript": "npm:@typescript/typescript6@^6.0.2",
     "vite": "^8.3.5"
+  },
+  "dependencies": {
+    "@kleinbem/web-config": "git+https://github.com/kleinbem/web-config.git#main"
   }
 }
