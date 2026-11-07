@@ -34,6 +34,8 @@
   let prChannel = $state('nixos-unstable');
 
   let errorMsg = $state('');
+  // A hold save can prefetch nixpkgs for minutes: one request at a time.
+  let saving = $state(false);
 
   function addPatch() {
     if (!patchInput.trim()) return;
@@ -73,7 +75,20 @@
     errorMsg = '';
   }
 
+  async function save(name: string, kind: DetourKind, entry: HoldEntry | PrEntry) {
+    saving = true;
+    try {
+      if (await onCreateDetour(name, kind, entry)) {
+        resetForm();
+        onClose();
+      }
+    } finally {
+      saving = false;
+    }
+  }
+
   async function handleSubmit() {
+    if (saving) return;
     errorMsg = '';
     const name = packageName.trim();
     if (!name) {
@@ -100,10 +115,7 @@
         untilChannel: prChannel.trim() || 'nixos-unstable'
       };
 
-      if (await onCreateDetour(name, 'pr', entry)) {
-        resetForm();
-        onClose();
-      }
+      await save(name, 'pr', entry);
       return;
     }
 
@@ -149,10 +161,7 @@
       override: isFix ? overrideFile.trim() || undefined : undefined
     };
 
-    if (await onCreateDetour(name, activeTab, entry)) {
-      resetForm();
-      onClose();
-    }
+    await save(name, activeTab, entry);
   }
 </script>
 
@@ -436,10 +445,11 @@
         <button
           type="button"
           onclick={handleSubmit}
-          class="px-4 py-2 bg-amber-500 hover:bg-amber-400 text-stone-950 font-bold rounded-xl shadow-lg shadow-amber-500/10 transition cursor-pointer font-mono text-xs flex items-center gap-1.5"
+          disabled={saving}
+          class="px-4 py-2 bg-amber-500 hover:bg-amber-400 text-stone-950 font-bold rounded-xl shadow-lg shadow-amber-500/10 transition cursor-pointer font-mono text-xs flex items-center gap-1.5 disabled:opacity-50 disabled:cursor-wait"
         >
           <span>✓</span>
-          <span>Create Detour</span>
+          <span>{saving ? 'Saving…' : 'Create Detour'}</span>
         </button>
       </div>
     </div>
