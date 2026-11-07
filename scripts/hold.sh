@@ -114,7 +114,7 @@ done
 # hold. A failed read stops here: committing over a file we couldn't read
 # would drop its holds.
 ahead=()
-if $checked && [[ -n $holds_repo ]] && ((${#held[@]})); then
+if $checked && [[ -n $holds_repo ]] && ((${#held[@]} + ${#failed[@]})); then
   if [[ -d $holds_repo ]]; then
     current=$(git -C "$holds_repo" show "HEAD:$holds_file")
   else
@@ -122,11 +122,19 @@ if $checked && [[ -n $holds_repo ]] && ((${#held[@]})); then
       -H "Accept: application/vnd.github.raw")
   fi
   jq -e 'type == "object"' <<<"$current" >/dev/null || { echo "$holds_repo: $holds_file is not a JSON object" >&2; exit 1; }
-  mapfile -t ahead < <(for name in "${held[@]}"; do
-    if jq -e --arg n "$name" 'has($n)' <<<"$current" >/dev/null; then echo "$name"; fi
-  done)
+  mapfile -t ahead < <(
+    for name in "${held[@]}"; do
+      if jq -e --arg n "$name" 'has($n)' <<<"$current" >/dev/null; then echo "$name"; fi
+    done
+    # One that fails held, when the repository's entry is newer than the
+    # lock's (a patch, another revision): updating the input may fix it.
+    for name in "${failed[@]}"; do
+      if jq -e --arg n "$name" --slurpfile b "$RUNNER_TEMP/holds.before" \
+        'has($n) and (.[$n] != ($b[0][$n] // null))' <<<"$current" >/dev/null; then echo "$name"; fi
+    done)
   if ((${#ahead[@]})); then
     mapfile -t held < <(printf '%s\n' "${held[@]}" | grep -vxF -f <(printf '%s\n' "${ahead[@]}") || true)
+    mapfile -t failed < <(printf '%s\n' "${failed[@]}" | grep -vxF -f <(printf '%s\n' "${ahead[@]}") || true)
   fi
 fi
 
