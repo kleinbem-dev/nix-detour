@@ -128,7 +128,7 @@
             <div class="flex items-center gap-2">
               {#if item.kind === 'pr'}
                 <a
-                  href={`https://github.com/${item.owner}/${item.repo}/pull/${item.prNumber}`}
+                  href={item.link || `https://github.com/${item.owner}/${item.repo}/pull/${item.prNumber}`}
                   target="_blank"
                   rel="noreferrer"
                   onclick={(e) => e.stopPropagation()}
@@ -168,13 +168,17 @@
           <!-- Age -->
           <td class="py-3 px-3 font-mono shrink-0">
             <div class="flex items-center gap-1.5">
-              <span class="text-stone-200 {item.ageDays > 14 ? 'text-rose-400 font-bold' : ''}">
-                {item.ageDays}d
-              </span>
-              {#if item.ageDays > 14}
-                <span class="px-1.5 py-0.2 rounded text-[10px] uppercase font-bold bg-rose-950/80 text-rose-300 border border-rose-800/60">
-                  stale
+              {#if item.ageDays > 0 || item.since}
+                <span class="text-stone-200 {item.ageDays > 14 ? 'text-rose-400 font-bold' : ''}">
+                  {item.ageDays}d
                 </span>
+                {#if item.ageDays > 14}
+                  <span class="px-1.5 py-0.2 rounded text-[10px] uppercase font-bold bg-rose-950/80 text-rose-300 border border-rose-800/60">
+                    stale
+                  </span>
+                {/if}
+              {:else}
+                <span class="text-stone-500 text-[11px]">-</span>
               {/if}
             </div>
             {#if item.since}
