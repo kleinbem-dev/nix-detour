@@ -557,8 +557,12 @@ in
         ! grep -q '^baz ' sub_file_list.txt
         if nix-detour list nonexistent 2>/dev/null; then echo "list with nonexistent path should fail" >&2; exit 1; fi
         if nix-detour list --file held-packages.json sub 2>/dev/null; then echo "list with both --file and positional path should fail" >&2; exit 1; fi
-        if nix-detour release foo nonexistent 2>/dev/null; then echo "release with nonexistent path should fail" >&2; exit 1; fi
-        if nix-detour release foo --file held-packages.json sub 2>/dev/null; then echo "release with both --file and positional path should fail" >&2; exit 1; fi
+        cp held-packages.json before_release.json
+        cp sub/held-packages.json sub_before_release.json
+        if nix-detour release baz nonexistent 2>/dev/null; then echo "release with nonexistent path should fail" >&2; exit 1; fi
+        if nix-detour release subpkg --file held-packages.json sub 2>/dev/null; then echo "release with both --file and positional path should fail" >&2; exit 1; fi
+        cmp held-packages.json before_release.json
+        cmp sub/held-packages.json sub_before_release.json
         touch $out
       '';
 

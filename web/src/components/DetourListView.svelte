@@ -13,11 +13,14 @@
 
   let { items, prStatuses, onSelect, onRelease, onTagClick, onStatusUpdate }: Props = $props();
 
+  const requestedPrs = new Set<number>();
+
   $effect(() => {
     if (onStatusUpdate) {
       for (const item of items) {
-        if (item.kind === 'pr' && item.prNumber && !prStatuses[item.prNumber]) {
+        if (item.kind === 'pr' && item.prNumber && !prStatuses[item.prNumber] && !requestedPrs.has(item.prNumber)) {
           const pr = item.prNumber;
+          requestedPrs.add(pr);
           fetch(`/api/pr-status?pr=${pr}`)
             .then((r) => (r.ok ? r.json() : null))
             .then((data: PrStatusInfo | null) => {
@@ -34,19 +37,27 @@
   let copiedItem = $state<string | null>(null);
   let copiedCommand = $state<string | null>(null);
 
-  function copyName(e: MouseEvent, name: string) {
+  async function copyName(e: MouseEvent, name: string) {
     e.stopPropagation();
-    navigator.clipboard.writeText(name);
+    try {
+      await navigator.clipboard.writeText(name);
+    } catch {
+      return;
+    }
     copiedItem = name;
     setTimeout(() => {
       if (copiedItem === name) copiedItem = null;
     }, 1500);
   }
 
-  function copyCliCommand(e: MouseEvent, name: string) {
+  async function copyCliCommand(e: MouseEvent, name: string) {
     e.stopPropagation();
     const arg = /^[a-zA-Z0-9_.-]+$/.test(name) ? name : shQuote(name);
-    navigator.clipboard.writeText(`nix-detour release ${arg}`);
+    try {
+      await navigator.clipboard.writeText(`nix-detour release ${arg}`);
+    } catch {
+      return;
+    }
     copiedCommand = name;
     setTimeout(() => {
       if (copiedCommand === name) copiedCommand = null;
