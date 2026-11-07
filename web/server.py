@@ -199,7 +199,8 @@ class DetourHandler(http.server.SimpleHTTPRequestHandler):
             self.send_header("Expires", "0")
         super().end_headers()
 
-    def do_GET(self):
+    def _handle_api_get(self, send_body=True):
+        """Handle GET and HEAD requests for API endpoints."""
         parsed_url = urllib.parse.urlparse(self.path)
         if parsed_url.path == "/api/data":
             holds_file, holds_disc = resolve_file(args.holds, "held-packages.json")
@@ -232,8 +233,9 @@ class DetourHandler(http.server.SimpleHTTPRequestHandler):
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
-            self.wfile.write(data)
-            return
+            if send_body:
+                self.wfile.write(data)
+            return True
 
         if parsed_url.path == "/api/pr-status":
             qs = urllib.parse.parse_qs(parsed_url.query)
@@ -241,7 +243,7 @@ class DetourHandler(http.server.SimpleHTTPRequestHandler):
             if not pr_val.isdigit():
                 self.send_response(400)
                 self.end_headers()
-                return
+                return True
             pr_num = int(pr_val)
             upstream = qs.get("upstream", ["NixOS/nixpkgs"])[0]
             channel = qs.get("channel", ["nixos-unstable"])[0]
@@ -251,8 +253,9 @@ class DetourHandler(http.server.SimpleHTTPRequestHandler):
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
-            self.wfile.write(data)
-            return
+            if send_body:
+                self.wfile.write(data)
+            return True
 
         if parsed_url.path == "/api/pr-statuses":
             cached = {k: v[1] for k, v in PR_CACHE.items()}
@@ -261,10 +264,23 @@ class DetourHandler(http.server.SimpleHTTPRequestHandler):
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
-            self.wfile.write(data)
-            return
+            if send_body:
+                self.wfile.write(data)
+            return True
 
+        return False
+
+    def do_GET(self):
+        """Handle HTTP GET requests for API routes and static assets."""
+        if self._handle_api_get(send_body=True):
+            return
         super().do_GET()
+
+    def do_HEAD(self):
+        """Handle HTTP HEAD requests for API routes and static assets."""
+        if self._handle_api_get(send_body=False):
+            return
+        super().do_HEAD()
 
     def do_POST(self):
         length = int(self.headers.get("Content-Length", 0))

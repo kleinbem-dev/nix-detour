@@ -2,10 +2,11 @@
   import { onMount } from 'svelte';
   import { initialHolds, initialPrs } from './defaultData';
   import { parseHolds, parsePrs } from './utils';
-  import type { HoldEntry, PrEntry, DetourItem, DetourKind, DetourFilter, PrStatusInfo } from './types';
+  import type { HoldEntry, PrEntry, DetourItem, DetourKind, DetourFilter, PrStatusInfo, ViewMode, SortOption } from './types';
   import Header from './components/Header.svelte';
   import StatsBar from './components/StatsBar.svelte';
   import DetourCard from './components/DetourCard.svelte';
+  import DetourListView from './components/DetourListView.svelte';
   import DetailModal from './components/DetailModal.svelte';
   import ImportModal from './components/ImportModal.svelte';
   import NewDetourModal from './components/NewDetourModal.svelte';
@@ -17,8 +18,44 @@
   let isLocalApi = $state(false);
   let prStatuses = $state<Record<number, PrStatusInfo>>({});
 
+  function getStoredViewMode(): ViewMode {
+    try {
+      if (typeof localStorage !== 'undefined') {
+        const stored = localStorage.getItem('nix-detour-view-mode') as ViewMode;
+        if (stored === 'grid' || stored === 'list') return stored;
+      }
+    } catch {}
+    return 'grid';
+  }
+
+  function getStoredSortOption(): SortOption {
+    try {
+      if (typeof localStorage !== 'undefined') {
+        const stored = localStorage.getItem('nix-detour-sort-option') as SortOption;
+        if (stored) return stored;
+      }
+    } catch {}
+    return 'age-desc';
+  }
+
   let searchQuery = $state('');
   let currentFilter = $state<DetourFilter>('all');
+  let viewMode = $state<ViewMode>(getStoredViewMode());
+  let sortOption = $state<SortOption>(getStoredSortOption());
+
+  function setViewMode(mode: ViewMode) {
+    viewMode = mode;
+    try {
+      localStorage.setItem('nix-detour-view-mode', mode);
+    } catch {}
+  }
+
+  function setSortOption(sort: SortOption) {
+    sortOption = sort;
+    try {
+      localStorage.setItem('nix-detour-sort-option', sort);
+    } catch {}
+  }
   let selectedItem = $state<DetourItem | null>(null);
   let showImportModal = $state(false);
   let showNewDetourModal = $state(false);
@@ -77,6 +114,31 @@
         (item.prNumber && String(item.prNumber).includes(q))
       );
     });
+  });
+
+  let sortedAndFilteredItems = $derived.by(() => {
+    const items = [...filteredItems];
+    switch (sortOption) {
+      case 'age-desc':
+        return items.sort((a, b) => b.ageDays - a.ageDays);
+      case 'age-asc':
+        return items.sort((a, b) => a.ageDays - b.ageDays);
+      case 'name-asc':
+        return items.sort((a, b) => a.name.localeCompare(b.name));
+      case 'name-desc':
+        return items.sort((a, b) => b.name.localeCompare(a.name));
+      case 'kind':
+        return items.sort((a, b) => a.kind.localeCompare(b.kind) || a.name.localeCompare(b.name));
+      case 'ready':
+        return items.sort((a, b) => {
+          const aReady = a.kind === 'pr' && a.prNumber && prStatuses[a.prNumber]?.inChannel ? 1 : 0;
+          const bReady = b.kind === 'pr' && b.prNumber && prStatuses[b.prNumber]?.inChannel ? 1 : 0;
+          if (aReady !== bReady) return bReady - aReady;
+          return b.ageDays - a.ageDays;
+        });
+      default:
+        return items;
+    }
   });
 
   async function reloadLocalData(showFeedback = false) {
@@ -224,7 +286,17 @@
     rawPrs = initialPrs;
     sourceName = 'kleinbem/nix-detour-fleet (sample)';
   }
+
+  function handleWindowKeydown(e: KeyboardEvent) {
+    if (e.key === '/' && !(e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement)) {
+      e.preventDefault();
+      const input = document.querySelector('input[type="text"]') as HTMLInputElement | null;
+      input?.focus();
+    }
+  }
 </script>
+
+<svelte:window onkeydown={handleWindowKeydown} />
 
 <div class="min-h-screen flex flex-col bg-stone-950 text-stone-100 font-sans">
   <Header
@@ -273,7 +345,74 @@
       onFilterChange={(f) => { currentFilter = f; }}
     />
 
-    <!-- Cards Grid -->
+    <!-- Toolbar: Results Count, Sort, and View Switcher -->
+    {#if allItems.length > 0}
+      <div class="mb-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-stone-900/40 p-2.5 rounded-xl border border-stone-800/60">
+        <div class="flex items-center gap-2 text-xs font-mono text-stone-400">
+          <span>
+            Showing <strong class="text-stone-200">{sortedAndFilteredItems.length}</strong> of <strong class="text-stone-200">{allItems.length}</strong> packages
+          </span>
+          {#if searchQuery || currentFilter !== 'all'}
+            <button
+              type="button"
+              onclick={() => { searchQuery = ''; currentFilter = 'all'; }}
+              class="text-[11px] text-amber-400 hover:text-amber-300 underline cursor-pointer ml-1"
+            >
+              Reset filters
+            </button>
+          {/if}
+        </div>
+
+        <div class="flex items-center gap-3 self-end sm:self-auto">
+          <!-- Sort Dropdown -->
+          <div class="flex items-center gap-1.5 text-xs text-stone-400 font-mono">
+            <label for="sort-select">Sort:</label>
+            <select
+              id="sort-select"
+              value={sortOption}
+              onchange={(e) => setSortOption((e.target as HTMLSelectElement).value as SortOption)}
+              class="bg-stone-900 border border-stone-800 rounded-lg px-2.5 py-1 text-xs font-mono text-stone-200 focus:outline-none focus:border-amber-500/80 cursor-pointer"
+            >
+              <option value="age-desc">Age: Oldest first</option>
+              <option value="age-asc">Age: Newest first</option>
+              <option value="name-asc">Name: A to Z</option>
+              <option value="name-desc">Name: Z to A</option>
+              <option value="ready">Ready to release</option>
+              <option value="kind">Kind (Hold/Fix/PR)</option>
+            </select>
+          </div>
+
+          <!-- View Mode Toggle -->
+          <div class="flex items-center bg-stone-900 border border-stone-800 rounded-xl p-0.5" role="group" aria-label="View mode">
+            <button
+              type="button"
+              onclick={() => setViewMode('grid')}
+              class="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-mono transition cursor-pointer {viewMode === 'grid' ? 'bg-amber-500 text-stone-950 font-bold shadow-sm' : 'text-stone-400 hover:text-stone-200'}"
+              title="Grid view"
+            >
+              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z" />
+              </svg>
+              <span>Grid</span>
+            </button>
+
+            <button
+              type="button"
+              onclick={() => setViewMode('list')}
+              class="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-mono transition cursor-pointer {viewMode === 'list' ? 'bg-amber-500 text-stone-950 font-bold shadow-sm' : 'text-stone-400 hover:text-stone-200'}"
+              title="List view (dense)"
+            >
+              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16" />
+              </svg>
+              <span>List</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    {/if}
+
+    <!-- Content: Grid or List -->
     {#if allItems.length === 0}
       <div class="text-center py-16 px-4 bg-stone-900/40 rounded-2xl border border-stone-800/60 max-w-lg mx-auto">
         <div class="text-4xl mb-3">📦</div>
@@ -298,7 +437,7 @@
           </button>
         </div>
       </div>
-    {:else if filteredItems.length === 0}
+    {:else if sortedAndFilteredItems.length === 0}
       <div class="text-center py-16 px-4 bg-stone-900/40 rounded-2xl border border-stone-800/60 max-w-lg mx-auto">
         <div class="text-3xl mb-3">🔍</div>
         <h3 class="text-base font-semibold text-stone-300">No detours match your filter</h3>
@@ -312,19 +451,32 @@
         </button>
       </div>
     {:else}
-      <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-        {#each filteredItems as item (item.id)}
-          <DetourCard
-            {item}
-            onSelect={(selected) => { selectedItem = selected; }}
-            onRelease={handleReleaseDetour}
-            onTagClick={(tag) => { searchQuery = tag; }}
-            onStatusUpdate={(prNum, status) => {
-              prStatuses = { ...prStatuses, [prNum]: status };
-            }}
-          />
-        {/each}
-      </div>
+      {#if viewMode === 'grid'}
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          {#each sortedAndFilteredItems as item (item.id)}
+            <DetourCard
+              {item}
+              onSelect={(selected) => { selectedItem = selected; }}
+              onRelease={handleReleaseDetour}
+              onTagClick={(tag) => { searchQuery = tag; }}
+              onStatusUpdate={(prNum, status) => {
+                prStatuses = { ...prStatuses, [prNum]: status };
+              }}
+            />
+          {/each}
+        </div>
+      {:else}
+        <DetourListView
+          items={sortedAndFilteredItems}
+          {prStatuses}
+          onSelect={(selected) => { selectedItem = selected; }}
+          onRelease={handleReleaseDetour}
+          onTagClick={(tag) => { searchQuery = tag; }}
+          onStatusUpdate={(prNum, status) => {
+            prStatuses = { ...prStatuses, [prNum]: status };
+          }}
+        />
+      {/if}
     {/if}
   </main>
 

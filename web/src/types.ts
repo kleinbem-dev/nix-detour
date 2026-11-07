@@ -34,6 +34,8 @@ export interface PrEntry {
 
 export type DetourKind = 'hold' | 'fix' | 'pr';
 export type DetourFilter = DetourKind | 'all' | 'stale' | 'ready';
+export type ViewMode = 'grid' | 'list';
+export type SortOption = 'age-desc' | 'age-asc' | 'name-asc' | 'name-desc' | 'kind' | 'ready';
 
 export interface PrStatusInfo {
   pr: number;

@@ -545,6 +545,24 @@ in
         nix-detour release bar
         test "$(jq -r 'keys | join(",")' held-packages.json)" = baz
         if nix-detour release missing 2>/dev/null; then echo "releasing a missing entry should fail" >&2; exit 1; fi
+
+        # Positional path handling
+        mkdir -p sub
+        echo '{"subpkg": {"from": "stable", "since": "2026-11-01"}}' > sub/held-packages.json
+        nix-detour list sub > sub_list.txt
+        grep -q '^subpkg ' sub_list.txt
+        ! grep -q '^baz ' sub_list.txt
+        nix-detour list sub/held-packages.json > sub_file_list.txt
+        grep -q '^subpkg ' sub_file_list.txt
+        ! grep -q '^baz ' sub_file_list.txt
+        if nix-detour list nonexistent 2>/dev/null; then echo "list with nonexistent path should fail" >&2; exit 1; fi
+        if nix-detour list --file held-packages.json sub 2>/dev/null; then echo "list with both --file and positional path should fail" >&2; exit 1; fi
+        cp held-packages.json before_release.json
+        cp sub/held-packages.json sub_before_release.json
+        if nix-detour release baz nonexistent 2>/dev/null; then echo "release with nonexistent path should fail" >&2; exit 1; fi
+        if nix-detour release subpkg --file held-packages.json sub 2>/dev/null; then echo "release with both --file and positional path should fail" >&2; exit 1; fi
+        cmp held-packages.json before_release.json
+        cmp sub/held-packages.json sub_before_release.json
         touch $out
       '';
 
@@ -592,6 +610,8 @@ in
           echo '{"state":"open","draft":false,"merged":false,"title":"mesh-llm"}'
         elif [ "$2" = "repos/NixOS/nixpkgs/pulls/100" ]; then
           echo '{"state":"closed","draft":false,"merged":true,"merge_commit_sha":"abc12345","title":"merged-landing"}'
+        elif [ "$2" = "repos/NixOS/nixpkgs/pulls/999" ]; then
+          echo '{"state":"open","draft":false,"merged":false,"title":"subpr"}'
         elif [ "$2" = "repos/NixOS/nixpkgs/compare/nixos-unstable...abc12345" ]; then
           echo '{"status":"behind"}'
         fi
@@ -608,6 +628,34 @@ in
                 grep -q '=== PRs ===' list_prs.txt
                 nix-detour release landed
                 test "$(jq -r 'has("landed")' nixpkgs-prs.json)" = false
+
+                # Positional path handling for PRs
+                mkdir -p subpr
+                echo '{"subpr": {"pr": 999, "owner": "o", "repo": "r", "attrs": ["subpr"]}}' > subpr/nixpkgs-prs.json
+                nix-detour pr list subpr > subpr_list.txt
+                grep -q '^subpr ' subpr_list.txt
+                if grep -q '^mesh ' subpr_list.txt; then echo "mesh should not be in subpr_list" >&2; exit 1; fi
+                nix-detour list subpr > sub_prs_list.txt
+                grep -q '^subpr ' sub_prs_list.txt
+                if grep -q '^mesh ' sub_prs_list.txt; then echo "mesh should not be in sub_prs_list" >&2; exit 1; fi
+                if nix-detour pr list nonexistent 2>/dev/null; then echo "pr list with nonexistent path should fail" >&2; exit 1; fi
+                if nix-detour pr list --file nixpkgs-prs.json subpr 2>/dev/null; then echo "pr list with both --file and positional path should fail" >&2; exit 1; fi
+                # Bare directory name without matching PR entry checks that directory's PR file
+                PATH=".:$PATH" nix-detour pr check subpr > subpr_check.txt
+                grep -q '^subpr[[:space:]]\+#999' subpr_check.txt
+                # Directory matching existing entry name still checks the entry
+                mkdir -p mesh
+                PATH=".:$PATH" nix-detour pr check mesh > mesh_check.txt
+                grep -q '^mesh[[:space:]]\+#571722' mesh_check.txt
+                # Explicit relative path forces directory check
+                echo '{"meshdir": {"pr": 999, "owner": "o", "repo": "r", "attrs": ["meshdir"]}}' > mesh/nixpkgs-prs.json
+                PATH=".:$PATH" nix-detour pr check ./mesh > mesh_dir_check.txt
+                grep -q '^meshdir[[:space:]]\+#999' mesh_dir_check.txt
+                # Bare file without matching PR entry checks that file
+                echo '{"prsfile": {"pr": 999, "owner": "o", "repo": "r", "attrs": ["prsfile"]}}' > bare-prs-file
+                PATH=".:$PATH" nix-detour pr check bare-prs-file > bare_file_check.txt
+                grep -q '^prsfile[[:space:]]\+#999' bare_file_check.txt
+
                 nix-detour web --help > web_help.txt
                 grep -q 'nix-detour web' web_help.txt
                 touch $out

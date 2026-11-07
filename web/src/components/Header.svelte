@@ -39,12 +39,22 @@
           type="text"
           value={searchQuery}
           oninput={(e) => onSearchChange((e.target as HTMLInputElement).value)}
-          placeholder="Filter packages, reasons, attrs..."
-          class="w-full bg-stone-900/90 border border-stone-800 rounded-xl pl-9 pr-3 py-1.5 text-xs text-stone-200 placeholder:text-stone-500 focus:outline-none focus:border-amber-500/80 focus:ring-1 focus:ring-amber-500/30 font-mono transition"
+          placeholder="Filter packages, reasons, attrs... (/)"
+          class="w-full bg-stone-900/90 border border-stone-800 rounded-xl pl-9 pr-8 py-1.5 text-xs text-stone-200 placeholder:text-stone-500 focus:outline-none focus:border-amber-500/80 focus:ring-1 focus:ring-amber-500/30 font-mono transition"
         />
         <svg class="w-4 h-4 text-stone-500 absolute left-3 top-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
         </svg>
+        {#if searchQuery}
+          <button
+            type="button"
+            onclick={() => onSearchChange('')}
+            class="absolute right-2.5 top-2 text-stone-400 hover:text-stone-200 text-xs cursor-pointer p-0.5"
+            title="Clear search"
+          >
+            ✕
+          </button>
+        {/if}
       </div>
 
       {#if onOpenNewDetour}
