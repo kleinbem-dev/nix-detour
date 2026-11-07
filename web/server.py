@@ -243,7 +243,7 @@ def pr_add_argv(name, entry, target):
     if not isinstance(attrs, list) or not attrs or not all(isinstance(a, str) and a for a in attrs):
         raise ValueError("attrs must list the packages to take from the PR")
     rev = entry.get("rev") or ""
-    if not re.fullmatch(r"[0-9a-f]{40}", rev):
+    if not isinstance(rev, str) or not re.fullmatch(r"[0-9a-f]{40}", rev):
         # The head commit is in nixpkgs too (refs/pull/N/head), also for a fork's branch.
         data = github_pr("NixOS/nixpkgs", pr) or {}
         rev = (data.get("head") or {}).get("sha") or ""
@@ -431,6 +431,10 @@ class DetourHandler(http.server.SimpleHTTPRequestHandler):
                             f.write("\n")
             except subprocess.TimeoutExpired:
                 self._send_json(500, {"ok": False, "error": "nix-detour timed out"})
+                return
+            except (OSError, ValueError, KeyError) as e:
+                log.warning("could not add %r to %s: %s", name, target, e)
+                self._send_json(500, {"ok": False, "error": f"could not update {target}: {e}"})
                 return
             if res.returncode != 0:
                 self._send_json(400, {"ok": False, "error": res.stderr.strip() or f"nix-detour exited with {res.returncode}"})
