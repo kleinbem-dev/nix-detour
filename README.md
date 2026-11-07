@@ -129,7 +129,9 @@ and offers one-click release and CLI copy actions.
 2. **Release:** the hold-release action (`uses: kleinbem-dev/nix-detour/hold-release@<sha> # v0.3.1`,
    after installing Nix) builds each release check from nixos-unstable and
    opens a PR removing the hold once it builds. Its `stale` output lists the holds
-   older than 14 days, for your own alert. A consumer whose nixpkgs is older
+   older than 14 days, for your own alert. To release only what builds on
+   every system, run it with `open-prs: false` on the other runners and pass
+   their `held` output to the opening run's `keep`. A consumer whose nixpkgs is older
    keeps failing its lock check until it catches up, so nothing breaks in
    between.
 3. **Alert:** a hold older than 14 days misses the fixes of the newer

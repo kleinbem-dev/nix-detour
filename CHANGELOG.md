@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- hold-release action: `open-prs: false` only checks, and the new `held`
+  output lists the holds that still fail. Pass another system's `held` to
+  `keep` so a hold goes only when it builds on every system you use.
+  `token` is needed only when the action opens PRs.
+
 - Update action: a failed download is not a broken package. Builds use
   `--fallback`, a failed build is retried once on its own, and one that
   still fails on a network error (a 5xx or 429 from a cache or source,
