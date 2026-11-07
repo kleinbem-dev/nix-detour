@@ -49,7 +49,7 @@ if [[ -n $holds_repo ]]; then
   [[ -z $holds_file ]] || HOLDS="$clone/$holds_file"
 fi
 
-held=() failed=() unchecked=()
+held=() failed=() unchecked=() unverified=()
 checked=false
 if [[ -e $HOLDS ]]; then
   checked=true
@@ -96,14 +96,25 @@ for n in 1 2 3 4 5 6; do
 done
 mapfile -t unattributed < <(awk '$1 == "unattributed" {print $2}' "$round" | sort -u)
 # A download failed (cache or network down): no hold, the next run checks again.
-mapfile -t unavailable < <(awk '$1 == "unavailable" {print $2}' "$round" | sort -u)
+# The last round decides; a package broken on one system and unavailable on
+# another counts as broken.
+mapfile -t unavailable < <(awk '$1 == "broken" {b[$2] = 1} $1 == "unavailable" {u[$2] = 1}
+  END {for (n in u) if (!(n in b)) print n}' "$round" | sort -u)
+# A hold whose last check couldn't download is not shown to work. The others
+# were only checked alongside it, so commit mode then commits nothing.
+for name in "${unavailable[@]}"; do
+  if has "$name" "${held[@]}"; then
+    unverified+=("$name")
+    mapfile -t held < <(printf '%s\n' "${held[@]}" | grep -vxF -- "$name" || true)
+  fi
+done
 
 # With HOLDS_REPO, the clone is at the revision the lock has. A hold that the
 # holds repository has by now needs a lock update of HOLDS_INPUT, not a new
 # hold. A failed read stops here: committing over a file we couldn't read
 # would drop its holds.
 ahead=()
-if $checked && [[ -n $holds_repo ]] && ((${#held[@]})); then
+if $checked && [[ -n $holds_repo ]] && ((${#held[@]} + ${#failed[@]})); then
   if [[ -d $holds_repo ]]; then
     current=$(git -C "$holds_repo" show "HEAD:$holds_file")
   else
@@ -111,11 +122,19 @@ if $checked && [[ -n $holds_repo ]] && ((${#held[@]})); then
       -H "Accept: application/vnd.github.raw")
   fi
   jq -e 'type == "object"' <<<"$current" >/dev/null || { echo "$holds_repo: $holds_file is not a JSON object" >&2; exit 1; }
-  mapfile -t ahead < <(for name in "${held[@]}"; do
-    if jq -e --arg n "$name" 'has($n)' <<<"$current" >/dev/null; then echo "$name"; fi
-  done)
+  mapfile -t ahead < <(
+    for name in "${held[@]}"; do
+      if jq -e --arg n "$name" 'has($n)' <<<"$current" >/dev/null; then echo "$name"; fi
+    done
+    # One that fails held, when the repository's entry is newer than the
+    # lock's (a patch, another revision): updating the input may fix it.
+    for name in "${failed[@]}"; do
+      if jq -e --arg n "$name" --slurpfile b "$RUNNER_TEMP/holds.before" \
+        'has($n) and (.[$n] != ($b[0][$n] // null))' <<<"$current" >/dev/null; then echo "$name"; fi
+    done)
   if ((${#ahead[@]})); then
     mapfile -t held < <(printf '%s\n' "${held[@]}" | grep -vxF -f <(printf '%s\n' "${ahead[@]}") || true)
+    mapfile -t failed < <(printf '%s\n' "${failed[@]}" | grep -vxF -f <(printf '%s\n' "${ahead[@]}") || true)
   fi
 fi
 
@@ -123,10 +142,14 @@ fi
 line() {
   echo "- \`$1\`: $(reason "$1")"
 }
+commit=false
+[[ $MODE == commit ]] && ((${#unverified[@]} == 0)) && commit=true
 {
   if ((${#held[@]})); then
-    if [[ $MODE == commit ]]; then
+    if $commit; then
       echo "Held on nixpkgs ${previous:0:12}, the one before this update:"
+    elif [[ $MODE == commit ]]; then
+      echo "To hold on nixpkgs ${previous:0:12}, not committed: a download failed while checking ${unverified[*]}:"
     else
       echo "To hold on nixpkgs ${previous:0:12} (they work there):"
     fi
@@ -177,7 +200,7 @@ line() {
 cat "$RUNNER_TEMP/report.md" >>"$GITHUB_STEP_SUMMARY"
 
 if $checked; then
-  if [[ $MODE == commit ]] && ((${#held[@]})); then
+  if $commit && ((${#held[@]})); then
     if [[ -n $holds_repo ]]; then
       # Only the new holds, on the holds file as it is now: changes merged
       # there during the checks stay.
@@ -199,9 +222,15 @@ Found by the nix-detour update action on ${GITHUB_REPOSITORY:-the lock update}."
 fi
 {
   # In report mode, "held" means "to hold".
-  if [[ $MODE == commit ]]; then echo "held=${held[*]}"; else echo "held=$(echo "${held[*]} ${unchecked[*]}" | xargs)"; fi
+  if [[ $MODE == commit ]]; then
+    # Only what was committed; nothing when an unverified hold stopped it.
+    if $commit; then echo "held=${held[*]}"; else echo "held="; fi
+  else
+    echo "held=$(echo "${held[*]} ${unchecked[*]}" | xargs)"
+  fi
   echo "failed=$(echo "${failed[*]} ${unattributed[*]}" | xargs)"
   echo "unavailable=${unavailable[*]}"
+  echo "ahead=${ahead[*]}"
   echo "report<<NIX_DETOUR_REPORT"
   cat "$RUNNER_TEMP/report.md"
   echo "NIX_DETOUR_REPORT"
