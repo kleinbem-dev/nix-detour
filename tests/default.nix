@@ -676,7 +676,7 @@ in
         set -euo pipefail
         port=18765 url=http://127.0.0.1:18765
         python3 ${../web/server.py} --port $port --static-dir . --holds "$PWD/held-packages.json" \
-          --cli ${lib.getExe nix-detour} 2>server.log &
+          --prs "$PWD/nixpkgs-prs.json" --cli ${lib.getExe nix-detour} 2>server.log &
         trap 'kill $!' EXIT
         for _ in $(seq 100); do curl -sf -o /dev/null $url/api/data && break; sleep 0.1; done
         # HTTP status of a POST to $1, the rest are curl's arguments; the body goes to resp.json.
@@ -694,6 +694,12 @@ in
         test "$(post /api/detour "''${json[@]}" -d '{"name":"bar","kind":"fix","entry":{"from":"current","reason":"r","patches":["nope.patch"]}}')" = 400
         jq -e '.error | test("nope.patch is not a file")' resp.json
         test "$(jq -r 'has("bar")' held-packages.json)" = false
+        # PR entries are pinned to the PR head; without network there is none, so nothing is saved.
+        pr='{"name":"mesh","kind":"pr","entry":{"pr":1,"owner":"NixOS","repo":"nixpkgs","rev":"","narHash":"","attrs":["mesh"]}}'
+        test "$(post /api/detour "''${json[@]}" -d "$pr")" = 400
+        jq -e '.error | test("head commit of NixOS/nixpkgs#1")' resp.json
+        test "$(post /api/detour "''${json[@]}" -d '{"name":"m","kind":"pr","entry":{"pr":1,"owner":"o","repo":"r","attrs":[]}}')" = 400
+        test ! -e nixpkgs-prs.json
 
         # Requests from other sites.
         test "$(post /api/detour -H 'Content-Type: text/plain' -d "$hold")" = 403

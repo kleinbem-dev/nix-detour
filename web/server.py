@@ -4,6 +4,7 @@ import http.server
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import threading
@@ -65,14 +66,8 @@ def resolve_file(explicit_path, filename):
     return os.path.abspath(os.path.join(cwd, filename)), False
 
 
-def fetch_pr_status(pr_number, upstream="NixOS/nixpkgs", channel="nixos-unstable"):
-    cache_key = f"{upstream}:{pr_number}:{channel}"
-    now = time.time()
-    if cache_key in PR_CACHE:
-        ts, cached_data = PR_CACHE[cache_key]
-        if now - ts < CACHE_TTL:
-            return cached_data
-
+def github_pr(upstream, pr_number):
+    """The GitHub API's pull request object, or None."""
     pr_data = None
     try:
         res = subprocess.run(
@@ -100,6 +95,18 @@ def fetch_pr_status(pr_number, upstream="NixOS/nixpkgs", channel="nixos-unstable
                 pr_data = json.loads(response.read().decode("utf-8"))
         except Exception as e:
             log.warning("GitHub API request failed for %r#%s: %s", upstream, pr_number, e)
+    return pr_data
+
+
+def fetch_pr_status(pr_number, upstream="NixOS/nixpkgs", channel="nixos-unstable"):
+    cache_key = f"{upstream}:{pr_number}:{channel}"
+    now = time.time()
+    if cache_key in PR_CACHE:
+        ts, cached_data = PR_CACHE[cache_key]
+        if now - ts < CACHE_TTL:
+            return cached_data
+
+    pr_data = github_pr(upstream, pr_number)
 
     if not pr_data:
         result = {
@@ -222,6 +229,27 @@ def hold_add_argv(name, kind, entry, target):
             raise ValueError("a patch must be a URL or a file next to the holds file")
         argv += ["--patch", patch]
     return argv
+
+
+def pr_add_argv(name, entry, target):
+    """The CLI call that adds a PR entry pinned to the PR's head commit, so it evaluates."""
+    pr = entry.get("pr")
+    if isinstance(pr, bool) or not isinstance(pr, int) or pr <= 0:
+        raise ValueError("pr must be a PR number")
+    owner, repo = entry.get("owner"), entry.get("repo")
+    if not isinstance(owner, str) or not owner or not isinstance(repo, str) or not repo:
+        raise ValueError("owner and repo name where the PR's branch is")
+    attrs = entry.get("attrs") or []
+    if not isinstance(attrs, list) or not attrs or not all(isinstance(a, str) and a for a in attrs):
+        raise ValueError("attrs must list the packages to take from the PR")
+    rev = entry.get("rev") or ""
+    if not re.fullmatch(r"[0-9a-f]{40}", rev):
+        # The head commit is in nixpkgs too (refs/pull/N/head), also for a fork's branch.
+        data = github_pr("NixOS/nixpkgs", pr) or {}
+        rev = (data.get("head") or {}).get("sha") or ""
+        if not re.fullmatch(r"[0-9a-f]{40}", rev):
+            raise ValueError(f"cannot find the head commit of NixOS/nixpkgs#{pr}")
+    return [CLI, "pr", "add", name, "--file", target, "--pr", str(pr), "--repo", f"{owner}/{repo}", "--attrs", ",".join(attrs), "--rev", rev]
 
 
 class DetourHandler(http.server.SimpleHTTPRequestHandler):
@@ -380,41 +408,33 @@ class DetourHandler(http.server.SimpleHTTPRequestHandler):
                 return
 
             target, _ = resolve_file(args.prs if kind == "pr" else args.holds, "nixpkgs-prs.json" if kind == "pr" else "held-packages.json")
-            if kind != "pr":
-                if not CLI:
-                    self._send_json(501, {"ok": False, "error": "adding holds needs the nix-detour CLI: run `nix-detour web`"})
-                    return
-                try:
-                    argv = hold_add_argv(name, kind, entry, target)
-                except ValueError as e:
-                    self._send_json(400, {"ok": False, "error": str(e)})
-                    return
-                # Prefetching a nixpkgs revision takes a while.
-                try:
-                    with FILE_LOCK:
-                        res = subprocess.run(argv, cwd=os.path.dirname(target), capture_output=True, text=True, timeout=900, check=False)
-                except subprocess.TimeoutExpired:
-                    self._send_json(500, {"ok": False, "error": "nix-detour timed out"})
-                    return
-                if res.returncode != 0:
-                    self._send_json(400, {"ok": False, "error": res.stderr.strip() or f"nix-detour exited with {res.returncode}"})
-                    return
-                self._send_json(200, {"ok": True})
+            if not CLI:
+                self._send_json(501, {"ok": False, "error": "adding detours needs the nix-detour CLI: run `nix-detour web`"})
                 return
-
-            with FILE_LOCK:
-                cur = {}
-                if os.path.exists(target):
-                    try:
+            try:
+                argv = pr_add_argv(name, entry, target) if kind == "pr" else hold_add_argv(name, kind, entry, target)
+            except ValueError as e:
+                self._send_json(400, {"ok": False, "error": str(e)})
+                return
+            # Prefetching a nixpkgs revision takes a while.
+            try:
+                with FILE_LOCK:
+                    res = subprocess.run(argv, cwd=os.path.dirname(target), capture_output=True, text=True, timeout=900, check=False)
+                    channel = entry.get("untilChannel")
+                    if res.returncode == 0 and kind == "pr" and isinstance(channel, str) and channel:
+                        # Only the dashboard reads it, so the CLI doesn't take it.
                         with open(target, "r") as f:
                             cur = json.load(f)
-                    except Exception:
-                        cur = {}
-                cur[name] = entry
-                with open(target, "w") as f:
-                    json.dump(cur, f, indent=2)
-                    f.write("\n")
-
+                        cur[name]["untilChannel"] = channel
+                        with open(target, "w") as f:
+                            json.dump(cur, f, indent=2)
+                            f.write("\n")
+            except subprocess.TimeoutExpired:
+                self._send_json(500, {"ok": False, "error": "nix-detour timed out"})
+                return
+            if res.returncode != 0:
+                self._send_json(400, {"ok": False, "error": res.stderr.strip() or f"nix-detour exited with {res.returncode}"})
+                return
             self._send_json(200, {"ok": True})
             return
 

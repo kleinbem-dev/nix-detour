@@ -32,9 +32,9 @@
   nixos-unstable. CLI: `nix-detour fix add NAME --patch … | --override …`
   (and `--patch`, `--override`, `--from current` on `hold add`).
 
-- Web dashboard: holds and fixes are added through the CLI, so a nixpkgs
-  revision and patch URLs are pinned by hash (they were saved without one,
-  and evaluation failed). The server refuses requests from other sites, and
+- Web dashboard: holds, fixes and PRs are added through the CLI, so a
+  nixpkgs revision, patch URLs and the PR's head commit are pinned by hash
+  (they were saved without one, and evaluation failed). The server refuses requests from other sites, and
   the dashboard says when saving or releasing fails. Imported data stays in
   the page instead of writing to the local files.
 
