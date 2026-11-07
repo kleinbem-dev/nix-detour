@@ -9,6 +9,7 @@
 #
 # Environment: FLAKE, HOLDS, INPUT, BASE, MODE (commit|report), BRANCH,
 # BUILD (true|fetches|false), NIX_DETOUR_ARGS, GH_TOKEN, HOLDS_REPO, HOLDS_INPUT,
+# EXPECTED_HEAD (default: the checkout's HEAD outside pull_request events),
 # HOLDS_TOKEN; RUNNER_TEMP, GITHUB_OUTPUT, GITHUB_STEP_SUMMARY and
 # GITHUB_REPOSITORY as on GitHub.
 set -euo pipefail
@@ -24,7 +25,8 @@ case $BUILD in
 esac
 
 git fetch -q --depth 1 origin "$BASE" || { echo "cannot fetch $BASE from origin (is this a git checkout of the repository?)" >&2; exit 1; }
-base_lock=$(git show FETCH_HEAD:flake.lock) || { echo "$BASE has no flake.lock" >&2; exit 1; }
+# ./ makes the path relative to this directory, like FLAKE.
+base_lock=$(git show "FETCH_HEAD:./${FLAKE%/}/flake.lock") || { echo "$BASE has no $FLAKE/flake.lock" >&2; exit 1; }
 jq -e . <<<"$base_lock" >/dev/null || { echo "$BASE's flake.lock is not valid JSON" >&2; exit 1; }
 previous=$(jq -er --arg i "$INPUT" '.nodes[.nodes.root.inputs[$i]].locked.rev' <<<"$base_lock") \
   || { echo "no input $INPUT in $BASE's flake.lock" >&2; exit 1; }
@@ -42,6 +44,25 @@ has() {
 }
 
 holds_repo="${HOLDS_REPO:-}"
+# Commit mode commits only onto the head the holds are computed on, so the
+# checkout must be that head (on a pull_request event, not the merge commit),
+# and a push meanwhile fails the commit.
+if [[ ${MODE:-} == commit && -z $holds_repo ]]; then
+  checkout=$(git rev-parse HEAD)
+  if [[ -z ${EXPECTED_HEAD:-} ]]; then
+    case ${GITHUB_EVENT_NAME:-} in
+      pull_request*)
+        echo "::error::commit mode on a pull_request event commits only to the PR's own branch, not $BRANCH" >&2
+        exit 1
+        ;;
+    esac
+    EXPECTED_HEAD=$checkout
+  elif [[ $EXPECTED_HEAD != "$checkout" ]]; then
+    echo "::error::the checkout ($checkout) is not the PR head ($EXPECTED_HEAD): check out with ref: \${{ github.event.pull_request.head.sha }}" >&2
+    exit 1
+  fi
+  export EXPECTED_HEAD
+fi
 if [[ -n $holds_repo ]]; then
   # Cloned by clone-holds.sh, which also points every check at the clone.
   clone="${NIX_DETOUR_HOLDS_CLONE:?run clone-holds.sh first}"

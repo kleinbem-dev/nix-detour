@@ -35,6 +35,10 @@ runs:
         PRS: ${{ inputs.prs-file }}
       run: |
         set -euo pipefail
+        incoming="$RUNNER_TEMP/prs.incoming"
+        cp "$PRS" "$incoming"
+        # Later steps see the file as this step got it, also when a PR fails.
+        trap 'cp "$incoming" "$PRS"' EXIT
         awk '$1 == "merged" {print $2}' "$RUNNER_TEMP/prs.txt" | while read -r name; do
           git checkout -- "$PRS"
           if ! jq -e --arg n "$name" 'has($n)' "$PRS" >/dev/null; then
