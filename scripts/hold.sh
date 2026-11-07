@@ -58,13 +58,6 @@ fi
 
 round="$results"
 for n in 1 2 3 4 5 6; do
-  # Held last round, but a download failed this time: not shown to work held.
-  while read -r name; do
-    if [[ -z $name ]] || ! has "$name" "${held[@]}"; then continue; fi
-    mapfile -t held < <(printf '%s\n' "${held[@]}" | grep -vxF -- "$name" || true)
-    "${cli[@]}" hold remove "$name" --file "$HOLDS"
-    unverified+=("$name")
-  done < <(awk '$1 == "unavailable" {print $2}' "$round" | sort -u)
   mapfile -t names < <(awk '$1 == "broken" {print $2}' "$round" | sort -u)
   new=()
   for name in "${names[@]}"; do
@@ -103,7 +96,18 @@ for n in 1 2 3 4 5 6; do
 done
 mapfile -t unattributed < <(awk '$1 == "unattributed" {print $2}' "$round" | sort -u)
 # A download failed (cache or network down): no hold, the next run checks again.
-mapfile -t unavailable < <({ awk '$1 == "unavailable" {print $2}' "$round"; printf '%s\n' "${unverified[@]}"; } | grep -v '^$' | sort -u)
+# The last round decides; a package broken on one system and unavailable on
+# another counts as broken.
+mapfile -t unavailable < <(awk '$1 == "broken" {b[$2] = 1} $1 == "unavailable" {u[$2] = 1}
+  END {for (n in u) if (!(n in b)) print n}' "$round" | sort -u)
+# A hold whose last check couldn't download is not shown to work. The others
+# were only checked alongside it, so commit mode then commits nothing.
+for name in "${unavailable[@]}"; do
+  if has "$name" "${held[@]}"; then
+    unverified+=("$name")
+    mapfile -t held < <(printf '%s\n' "${held[@]}" | grep -vxF -- "$name" || true)
+  fi
+done
 
 # With HOLDS_REPO, the clone is at the revision the lock has. A hold that the
 # holds repository has by now needs a lock update of HOLDS_INPUT, not a new
@@ -130,10 +134,14 @@ fi
 line() {
   echo "- \`$1\`: $(reason "$1")"
 }
+commit=false
+[[ $MODE == commit ]] && ((${#unverified[@]} == 0)) && commit=true
 {
   if ((${#held[@]})); then
-    if [[ $MODE == commit ]]; then
+    if $commit; then
       echo "Held on nixpkgs ${previous:0:12}, the one before this update:"
+    elif [[ $MODE == commit ]]; then
+      echo "To hold on nixpkgs ${previous:0:12}, not committed: a download failed while checking ${unverified[*]}:"
     else
       echo "To hold on nixpkgs ${previous:0:12} (they work there):"
     fi
@@ -175,7 +183,7 @@ line() {
     echo "Not checked, a download failed (the cache or network, not this update):"
     echo
     for name in "${unavailable[@]}"; do
-      echo "- \`$name\`: $(awk -v n="$name" '$1 == "unavailable" && $2 == n {$1 = $2 = ""; sub(/^ +/, ""); print; exit}' "$all")"
+      echo "- \`$name\`: $(awk -v n="$name" '$1 == "unavailable" && $2 == n {$1 = $2 = ""; sub(/^ +/, ""); print; exit}' "$round")"
     done
     echo
   fi
@@ -184,7 +192,7 @@ line() {
 cat "$RUNNER_TEMP/report.md" >>"$GITHUB_STEP_SUMMARY"
 
 if $checked; then
-  if [[ $MODE == commit ]] && ((${#held[@]})); then
+  if $commit && ((${#held[@]})); then
     if [[ -n $holds_repo ]]; then
       # Only the new holds, on the holds file as it is now: changes merged
       # there during the checks stay.
@@ -206,7 +214,7 @@ Found by the nix-detour update action on ${GITHUB_REPOSITORY:-the lock update}."
 fi
 {
   # In report mode, "held" means "to hold".
-  if [[ $MODE == commit ]]; then echo "held=${held[*]}"; else echo "held=$(echo "${held[*]} ${unchecked[*]}" | xargs)"; fi
+  if $commit; then echo "held=${held[*]}"; else echo "held=$(echo "${held[*]} ${unchecked[*]}" | xargs)"; fi
   echo "failed=$(echo "${failed[*]} ${unattributed[*]}" | xargs)"
   echo "unavailable=${unavailable[*]}"
   echo "report<<NIX_DETOUR_REPORT"
