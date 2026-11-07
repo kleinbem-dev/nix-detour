@@ -11,6 +11,9 @@ permissions: {}
 jobs:
   maintain:
     uses: kleinbem/actions/.github/workflows/maintain-flake.yaml@4c768a74873b0de7772c1af40b777bacb7c68495 # v1.6.2
+    with:
+      # The mk-holds tests read a built fake PR during evaluation, so --no-build can't check them.
+      validate: nix flake check
     secrets:
       app-id: ${{ secrets.APP_ID }}
       app-private-key: ${{ secrets.APP_PRIVATE_KEY }}
