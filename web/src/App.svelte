@@ -18,14 +18,30 @@
   let isLocalApi = $state(false);
   let prStatuses = $state<Record<number, PrStatusInfo>>({});
 
+  function getStoredViewMode(): ViewMode {
+    try {
+      if (typeof localStorage !== 'undefined') {
+        const stored = localStorage.getItem('nix-detour-view-mode') as ViewMode;
+        if (stored === 'grid' || stored === 'list') return stored;
+      }
+    } catch {}
+    return 'grid';
+  }
+
+  function getStoredSortOption(): SortOption {
+    try {
+      if (typeof localStorage !== 'undefined') {
+        const stored = localStorage.getItem('nix-detour-sort-option') as SortOption;
+        if (stored) return stored;
+      }
+    } catch {}
+    return 'age-desc';
+  }
+
   let searchQuery = $state('');
   let currentFilter = $state<DetourFilter>('all');
-  let viewMode = $state<ViewMode>(
-    (typeof localStorage !== 'undefined' && (localStorage.getItem('nix-detour-view-mode') as ViewMode)) || 'grid'
-  );
-  let sortOption = $state<SortOption>(
-    (typeof localStorage !== 'undefined' && (localStorage.getItem('nix-detour-sort-option') as SortOption)) || 'age-desc'
-  );
+  let viewMode = $state<ViewMode>(getStoredViewMode());
+  let sortOption = $state<SortOption>(getStoredSortOption());
 
   function setViewMode(mode: ViewMode) {
     viewMode = mode;
@@ -350,8 +366,9 @@
         <div class="flex items-center gap-3 self-end sm:self-auto">
           <!-- Sort Dropdown -->
           <div class="flex items-center gap-1.5 text-xs text-stone-400 font-mono">
-            <span>Sort:</span>
+            <label for="sort-select">Sort:</label>
             <select
+              id="sort-select"
               value={sortOption}
               onchange={(e) => setSortOption((e.target as HTMLSelectElement).value as SortOption)}
               class="bg-stone-900 border border-stone-800 rounded-lg px-2.5 py-1 text-xs font-mono text-stone-200 focus:outline-none focus:border-amber-500/80 cursor-pointer"

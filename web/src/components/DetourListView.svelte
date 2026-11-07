@@ -13,6 +13,24 @@
 
   let { items, prStatuses, onSelect, onRelease, onTagClick, onStatusUpdate }: Props = $props();
 
+  $effect(() => {
+    if (onStatusUpdate) {
+      for (const item of items) {
+        if (item.kind === 'pr' && item.prNumber && !prStatuses[item.prNumber]) {
+          const pr = item.prNumber;
+          fetch(`/api/pr-status?pr=${pr}`)
+            .then((r) => (r.ok ? r.json() : null))
+            .then((data: PrStatusInfo | null) => {
+              if (data) {
+                onStatusUpdate(pr, data);
+              }
+            })
+            .catch(() => {});
+        }
+      }
+    }
+  });
+
   let copiedItem = $state<string | null>(null);
   let copiedCommand = $state<string | null>(null);
 
@@ -68,6 +86,7 @@
           tabindex="0"
           onclick={() => onSelect(item)}
           onkeydown={(e) => {
+            if (e.target !== e.currentTarget) return;
             if (e.key === 'Enter' || e.key === ' ') {
               e.preventDefault();
               onSelect(item);

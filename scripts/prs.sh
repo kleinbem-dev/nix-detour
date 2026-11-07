@@ -91,12 +91,28 @@ elif ! $file_explicit && [[ -n "$name" ]]; then
         file="$name"
         name=""
       fi
-    elif [[ -d "$name" ]] && ! { [[ -f "$file" ]] && jq -e --arg n "$name" 'has($n)' "$file" >/dev/null 2>&1; }; then
-      file="$name/nixpkgs-prs.json"
-      name=""
-    elif [[ -f "$name" ]] && ! { [[ -f "$file" ]] && jq -e --arg n "$name" 'has($n)' "$file" >/dev/null 2>&1; }; then
-      file="$name"
-      name=""
+    elif [[ -d "$name" ]]; then
+      if [[ -f "$file" ]]; then
+        has_entry=$(jq -r --arg n "$name" 'if has($n) then "yes" else "no" end' "$file" 2>/dev/null) || die "$file is not valid JSON"
+        if [[ "$has_entry" != "yes" ]]; then
+          file="$name/nixpkgs-prs.json"
+          name=""
+        fi
+      else
+        file="$name/nixpkgs-prs.json"
+        name=""
+      fi
+    elif [[ -f "$name" ]]; then
+      if [[ -f "$file" ]]; then
+        has_entry=$(jq -r --arg n "$name" 'if has($n) then "yes" else "no" end' "$file" 2>/dev/null) || die "$file is not valid JSON"
+        if [[ "$has_entry" != "yes" ]]; then
+          file="$name"
+          name=""
+        fi
+      else
+        file="$name"
+        name=""
+      fi
     fi
   fi
 fi

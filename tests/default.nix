@@ -630,10 +630,10 @@ in
                 echo '{"subpr": {"pr": 999, "owner": "o", "repo": "r", "attrs": ["subpr"]}}' > subpr/nixpkgs-prs.json
                 nix-detour pr list subpr > subpr_list.txt
                 grep -q '^subpr ' subpr_list.txt
-                ! grep -q '^mesh ' subpr_list.txt
+                if grep -q '^mesh ' subpr_list.txt; then echo "mesh should not be in subpr_list" >&2; exit 1; fi
                 nix-detour list subpr > sub_prs_list.txt
                 grep -q '^subpr ' sub_prs_list.txt
-                ! grep -q '^mesh ' sub_prs_list.txt
+                if grep -q '^mesh ' sub_prs_list.txt; then echo "mesh should not be in sub_prs_list" >&2; exit 1; fi
                 if nix-detour pr list nonexistent 2>/dev/null; then echo "pr list with nonexistent path should fail" >&2; exit 1; fi
                 if nix-detour pr list --file nixpkgs-prs.json subpr 2>/dev/null; then echo "pr list with both --file and positional path should fail" >&2; exit 1; fi
                 # Bare directory name without matching PR entry checks that directory's PR file
