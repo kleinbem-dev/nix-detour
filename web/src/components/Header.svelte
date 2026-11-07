@@ -1,4 +1,7 @@
 <script lang="ts">
+  import FontSizeToggle from '@kleinbem/web-config/font-size/toggle';
+  import ThemeToggle from '@kleinbem/web-config/theme/toggle';
+
   interface Props {
     searchQuery: string;
     sourceName: string;
@@ -13,7 +16,7 @@
 </script>
 
 <header class="border-b border-stone-800 bg-stone-950/80 backdrop-blur-md sticky top-0 z-40">
-  <div class="max-w-7xl mx-auto px-4 sm:px-6 py-4 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-4">
+  <div class="w-full px-4 sm:px-6 py-3.5 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-4">
     <!-- Brand -->
     <div class="flex items-center gap-3">
       <div class="w-9 h-9 rounded-xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-lg">
@@ -106,6 +109,11 @@
           <span>Export</span>
         </button>
       {/if}
+
+      <div class="flex items-center gap-1.5 pl-1">
+        <FontSizeToggle />
+        <ThemeToggle />
+      </div>
 
       <a
         href="https://github.com/kleinbem-dev/nix-detour"
