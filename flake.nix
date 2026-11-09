@@ -23,68 +23,70 @@
       forAllSystems = f: lib.genAttrs systems (system: f nixpkgs.legacyPackages.${system});
     in
     {
-      # holds: held-packages.json (a path) or an attrset; nixpkgs-stable: for `from = "stable"`.
-      # extraOverlays: your own overlays, so your own packages can be held too.
-      # config: nixpkgs config for the held sets; default: carried over from yours.
-      lib.mkHolds =
-        {
-          holds,
-          nixpkgs-stable ? inputs.nixpkgs-stable,
-          extraOverlays ? [ ],
-          config ? null,
-        }:
-        let
-          entries = if builtins.isAttrs holds then holds else lib.importJSON holds;
-          heldIn = pkgs: builtins.filter (name: pkgs ? ${name}) (builtins.attrNames entries);
-        in
-        {
-          overlay = import ./overlay.nix {
-            inherit nixpkgs-stable extraOverlays config;
-            holds = entries;
-            root = if builtins.isAttrs holds then null else dirOf holds;
+      lib = {
+        # holds: held-packages.json (a path) or an attrset; nixpkgs-stable: for `from = "stable"`.
+        # extraOverlays: your own overlays, so your own packages can be held too.
+        # config: nixpkgs config for the held sets; default: carried over from yours.
+        mkHolds =
+          {
+            holds,
+            nixpkgs-stable ? inputs.nixpkgs-stable,
+            extraOverlays ? [ ],
+            config ? null,
+          }:
+          let
+            entries = if builtins.isAttrs holds then holds else lib.importJSON holds;
+            heldIn = pkgs: builtins.filter (name: pkgs ? ${name}) (builtins.attrNames entries);
+          in
+          {
+            overlay = import ./overlay.nix {
+              inherit nixpkgs-stable extraOverlays config;
+              holds = entries;
+              root = if builtins.isAttrs holds then null else dirOf holds;
+            };
+
+            # NixOS tests of the held packages (`tests`, default nixosTests.<name>):
+            # the module is from the current nixpkgs and the package from its hold,
+            # so a mismatch only shows at runtime. Run them with your own overlays.
+            nixosTests =
+              pkgs:
+              let
+                testsOf = name: entries.${name}.tests or (lib.optional (pkgs.nixosTests ? ${name}) name);
+              in
+              lib.genAttrs (lib.unique (lib.concatMap testsOf (heldIn pkgs))) (test: pkgs.nixosTests.${test});
+
+            # Per hold, its `releaseWhen` (default: the package) from a set without
+            # the holds; the hold can go once this builds on the newest nixpkgs.
+            # `nixHolds` carries the entry, so the tools read the holds in use.
+            releaseChecks =
+              pkgs:
+              lib.genAttrs (heldIn pkgs) (
+                name:
+                let
+                  entry = entries.${name};
+                  path = lib.splitString "." (entry.releaseWhen or name);
+                  pkg = lib.attrByPath path null pkgs;
+                  versionSatisfied =
+                    if entry ? untilVersion && pkg != null && pkg ? version then
+                      builtins.compareVersions pkg.version entry.untilVersion >= 0
+                    else
+                      true;
+                in
+                (if pkg != null && versionSatisfied then pkg else { })
+                // {
+                  nixHolds = entry;
+                }
+              );
           };
 
-          # NixOS tests of the held packages (`tests`, default nixosTests.<name>):
-          # the module is from the current nixpkgs and the package from its hold,
-          # so a mismatch only shows at runtime. Run them with your own overlays.
-          nixosTests =
-            pkgs:
-            let
-              testsOf = name: entries.${name}.tests or (lib.optional (pkgs.nixosTests ? ${name}) name);
-            in
-            lib.genAttrs (lib.unique (lib.concatMap testsOf (heldIn pkgs))) (test: pkgs.nixosTests.${test});
+        # Packages from open nixpkgs PRs of one consumer (see prs.nix).
+        #   prs: its nixpkgs-prs.json (a path) or the same as an attrset
+        mkPrs = { prs }: import ./prs.nix { inherit lib prs; };
 
-          # Per hold, its `releaseWhen` (default: the package) from a set without
-          # the holds; the hold can go once this builds on the newest nixpkgs.
-          # `nixHolds` carries the entry, so the tools read the holds in use.
-          releaseChecks =
-            pkgs:
-            lib.genAttrs (heldIn pkgs) (
-              name:
-              let
-                entry = entries.${name};
-                path = lib.splitString "." (entry.releaseWhen or name);
-                pkg = lib.attrByPath path null pkgs;
-                versionSatisfied =
-                  if entry ? untilVersion && pkg != null && pkg ? version then
-                    builtins.compareVersions pkg.version entry.untilVersion >= 0
-                  else
-                    true;
-              in
-              (if pkg != null && versionSatisfied then pkg else { })
-              // {
-                nixHolds = entry;
-              }
-            );
-        };
-
-      # Packages from open nixpkgs PRs of one consumer (see prs.nix).
-      #   prs: its nixpkgs-prs.json (a path) or the same as an attrset
-      lib.mkPrs = { prs }: import ./prs.nix { inherit lib prs; };
-
-      # What the update action checks (see watch.nix): lib.watch.nixos
-      # nixosSystem, or lib.watch.packages { pkgs, packages }.
-      lib.watch = import ./watch.nix { inherit lib; };
+        # What the update action checks (see watch.nix): lib.watch.nixos
+        # nixosSystem, or lib.watch.packages { pkgs, packages }.
+        watch = import ./watch.nix { inherit lib; };
+      };
 
       # The CLI: add, remove, list and check holds, and the same for PR
       # packages (`nix-detour pr`). Nix itself comes from the user's PATH.
