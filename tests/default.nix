@@ -422,7 +422,7 @@ let
           };
         in
         [
-          (t.pkgs.figlet.meta.broken)
+          t.pkgs.figlet.meta.broken
           (t.target.outPath == brokenPkgs.hello.outPath)
         ];
       expected = [
