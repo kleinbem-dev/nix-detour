@@ -12,8 +12,13 @@ out() {
   echo "$2"
 }
 [[ ${SKIP_UNMOVED:-false} == true ]] || { out true "Checking every run (skip-unmoved is off)."; exit 0; }
+# Walks the input path through the lock, follows included (as clone-holds.sh).
+# shellcheck disable=SC2016  # a jq program
 rev() {
-  jq -er --arg i "$INPUT" '.nodes[.nodes.root.inputs[$i]].locked.rev'
+  jq -er --arg i "$INPUT" '. as $lock | def nodeof($segs): reduce $segs[] as $s ($lock.root // "root";
+    if . == null then null else ($lock.nodes[.].inputs[$s] // null)
+    | if type == "array" then nodeof(.) else . end end);
+    $lock.nodes[nodeof($i | split("/"))].locked.rev'
 }
 git fetch -q --depth 1 origin "$BASE" || { echo "cannot fetch $BASE from origin" >&2; exit 1; }
 # ./ makes the path relative to this directory, like FLAKE.

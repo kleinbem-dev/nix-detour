@@ -244,8 +244,10 @@ jobs:
         id: holds
         with:
           skip-unmoved: true
+          base: ${{ github.base_ref }}
           build: true       # fetches misses packages that fail to compile
-      - if: steps.holds.outputs.held != '' || steps.holds.outputs.failed != ''
+      # unavailable: a download failed, so those weren't checked
+      - if: steps.holds.outputs.held != '' || steps.holds.outputs.failed != '' || steps.holds.outputs.unavailable != ''
         run: exit 1         # or comment steps.holds.outputs.report on the PR
 ```
 
