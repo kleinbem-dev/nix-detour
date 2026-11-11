@@ -474,6 +474,19 @@ let
         hello = [ pkgs.hello.drvPath ];
       };
     };
+    # Can't tell an override of the held package from an unheld copy: listed,
+    # and the report says it may be either.
+    testUnreachedOverrideOfHeld = {
+      expr = watch.unreached {
+        pkgs = fixedPkgs;
+        plain = pkgs;
+        names = [ "hello" ];
+        closure = [ (fixedPkgs.hello.overrideAttrs { DETOUR_TEST = "1"; }).drvPath ];
+      };
+      expected = {
+        hello = [ (fixedPkgs.hello.overrideAttrs { DETOUR_TEST = "1"; }).drvPath ];
+      };
+    };
     testFixCurrentKeepsVersion = {
       expr = fixedPkgs.hello.version;
       expected = pkgs.hello.version;

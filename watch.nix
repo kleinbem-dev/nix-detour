@@ -34,8 +34,9 @@ let
     )) (name: pkgs.${name});
   # Held packages a target still has unheld, as { name = [ drv ... ]; }: a
   # derivation in its closure with the held package's name (held, or as
-  # nixpkgs has it) that isn't the held one. It comes from a package set the
-  # overlay doesn't reach, such as another flake's `packages` output.
+  # nixpkgs has it) that isn't the held one: from a package set the overlay
+  # doesn't reach (another flake's `packages` output), or an override of the
+  # held package, which this can't tell apart.
   #   pkgs: the target's package set (with its holds)
   #   names: the held attribute names
   #   closure: the target's derivations (store paths ending in .drv)
