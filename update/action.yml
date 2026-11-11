@@ -64,6 +64,9 @@ outputs:
   unavailable:
     description: Packages not checked because a download failed (cache or network down), separated by spaces. Never held.
     value: ${{ steps.hold.outputs.unavailable }}
+  unreached:
+    description: Held packages a target still has unheld, from a package set the holds overlay doesn't reach (so the hold can't fix it there), separated by spaces
+    value: ${{ steps.hold.outputs.unreached }}
   report:
     description: A Markdown report of all of these
     value: ${{ steps.hold.outputs.report }}

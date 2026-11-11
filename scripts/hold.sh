@@ -159,6 +159,13 @@ if $checked && [[ -n $holds_repo ]] && ((${#held[@]} + ${#failed[@]})); then
   fi
 fi
 
+# Holds a target still has unheld (another package set, the overlay doesn't
+# reach it): that hold can't fix the target.
+unreached=()
+if $checked; then
+  "$here/reach.sh" "$FLAKE" "$HOLDS" >"$RUNNER_TEMP/unreached.txt" || true
+  mapfile -t unreached < <(awk '{print $2}' "$RUNNER_TEMP/unreached.txt" | sort -u)
+fi
 
 line() {
   echo "- \`$1\`: $(reason "$1")"
@@ -216,7 +223,15 @@ commit=false
     done
     echo
   fi
-  ((${#held[@]} + ${#ahead[@]} + ${#unchecked[@]} + ${#failed[@]} + ${#unattributed[@]} + ${#unavailable[@]})) || echo "Nothing fails."
+  if ((${#unreached[@]})); then
+    echo "Held, but a target still has the unheld package from a package set the holds overlay doesn't reach (another flake's \`packages\`, an \`import nixpkgs\`), so the hold can't fix it there:"
+    echo
+    while read -r _ name target drv; do
+      echo "- \`$name\` in \`$target\`: \`$drv\`"
+    done <"$RUNNER_TEMP/unreached.txt"
+    echo
+  fi
+  ((${#held[@]} + ${#ahead[@]} + ${#unchecked[@]} + ${#failed[@]} + ${#unattributed[@]} + ${#unavailable[@]} + ${#unreached[@]})) || echo "Nothing fails."
 } >"$RUNNER_TEMP/report.md"
 cat "$RUNNER_TEMP/report.md" >>"$GITHUB_STEP_SUMMARY"
 
@@ -252,6 +267,7 @@ fi
   echo "failed=$(echo "${failed[*]} ${unattributed[*]}" | xargs)"
   echo "unavailable=${unavailable[*]}"
   echo "ahead=${ahead[*]}"
+  echo "unreached=${unreached[*]}"
   echo "report<<NIX_DETOUR_REPORT"
   cat "$RUNNER_TEMP/report.md"
   echo "NIX_DETOUR_REPORT"
