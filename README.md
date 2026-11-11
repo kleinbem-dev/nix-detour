@@ -192,6 +192,12 @@ nixDetourWatch.x86_64-linux = inputs.nix-detour.lib.watch.nixos self.nixosConfig
 Only top-level packages can be held, so only those are found. Targets are
 evaluated, not built.
 
+A hold only reaches packages from the set its overlay is in. For each target
+the action also lists the holds it still has unheld: a derivation in its
+closure with the held package's name that isn't the held one, such as one from
+another flake's `packages` output or an `import nixpkgs` in a module. That
+hold can't fix the target; take the package from the target's `pkgs` instead.
+
 ```yaml
 # in the workflow that opens or updates the lock PR, after installing Nix
 - uses: kleinbem-dev/nix-detour/update@<sha> # v0.3.1

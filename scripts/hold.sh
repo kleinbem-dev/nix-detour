@@ -159,6 +159,14 @@ if $checked && [[ -n $holds_repo ]] && ((${#held[@]} + ${#failed[@]})); then
   fi
 fi
 
+# Holds a target still has unheld (another package set, the overlay doesn't
+# reach it): that hold can't fix the target.
+unreached=() reachUnchecked=()
+if $checked; then
+  "$here/reach.sh" "$FLAKE" "$HOLDS" >"$RUNNER_TEMP/unreached.txt" || true
+  mapfile -t unreached < <(awk '$1 == "unreached" {print $2}' "$RUNNER_TEMP/unreached.txt" | sort -u)
+  mapfile -t reachUnchecked < <(awk '$1 == "unchecked" {print $2}' "$RUNNER_TEMP/unreached.txt" | sort -u)
+fi
 
 line() {
   echo "- \`$1\`: $(reason "$1")"
@@ -216,7 +224,25 @@ commit=false
     done
     echo
   fi
-  ((${#held[@]} + ${#ahead[@]} + ${#unchecked[@]} + ${#failed[@]} + ${#unattributed[@]} + ${#unavailable[@]})) || echo "Nothing fails."
+  if ((${#unreached[@]})); then
+    echo "Held, but a target also has another derivation of the same name: one from a package set the holds overlay doesn't reach (another flake's \`packages\`, an \`import nixpkgs\`), which the hold can't fix, or an override of the held package:"
+    echo
+    while read -r kind name target drv; do
+      [[ $kind == unreached ]] || continue
+      echo "- \`$name\` in \`$target\`: \`$drv\`"
+    done <"$RUNNER_TEMP/unreached.txt"
+    echo
+  fi
+  if ((${#reachUnchecked[@]})); then
+    echo "Not checked whether the holds reach these targets:"
+    echo
+    while read -r kind target why; do
+      [[ $kind == unchecked ]] || continue
+      echo "- \`$target\`: $why"
+    done <"$RUNNER_TEMP/unreached.txt"
+    echo
+  fi
+  ((${#held[@]} + ${#ahead[@]} + ${#unchecked[@]} + ${#failed[@]} + ${#unattributed[@]} + ${#unavailable[@]} + ${#unreached[@]} + ${#reachUnchecked[@]})) || echo "Nothing fails."
 } >"$RUNNER_TEMP/report.md"
 cat "$RUNNER_TEMP/report.md" >>"$GITHUB_STEP_SUMMARY"
 
@@ -252,6 +278,7 @@ fi
   echo "failed=$(echo "${failed[*]} ${unattributed[*]}" | xargs)"
   echo "unavailable=${unavailable[*]}"
   echo "ahead=${ahead[*]}"
+  echo "unreached=${unreached[*]}"
   echo "report<<NIX_DETOUR_REPORT"
   cat "$RUNNER_TEMP/report.md"
   echo "NIX_DETOUR_REPORT"

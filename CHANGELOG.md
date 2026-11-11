@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Update action: lists holds a target still has unheld (new `unreached`
+  output and report section), from a package set the holds overlay doesn't
+  reach. On 2026-11-11 a buzz-cli hold changed nothing: cadre's home-manager
+  module installed buzz-app from its own flake's `packages`. `lib.watch.unreached`
+  is the check in Nix.
+
 - hold-release action: `open-prs: false` only checks, and the new `held`
   output lists the holds that still fail. Pass another system's `held` to
   `keep` so a hold goes only when it builds on every system you use.

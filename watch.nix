@@ -32,9 +32,54 @@ let
     lib.genAttrs (lib.filter (name: lib.any (p: nameOf p == name && same p name) packages) (
       lib.unique watched
     )) (name: pkgs.${name});
+  # Held packages a target still has unheld, as { name = [ drv ... ]; }: a
+  # derivation in its closure with the held package's name (held, or as
+  # nixpkgs has it) that isn't the held one: from a package set the overlay
+  # doesn't reach (another flake's `packages` output), or an override of the
+  # held package, which this can't tell apart.
+  #   pkgs: the target's package set (with its holds)
+  #   names: the held attribute names
+  #   closure: the target's derivations (store paths ending in .drv)
+  #   plain: nixpkgs without overlays, for an unheld version's name
+  unreached =
+    {
+      pkgs,
+      names,
+      closure,
+      plain ? import pkgs.path {
+        inherit (pkgs.stdenv.hostPlatform) system;
+        config.allowAliases = false;
+      },
+    }:
+    let
+      nameOf = drv: lib.removeSuffix ".drv" (lib.removePrefix "${builtins.storeDir}/" drv);
+      # Without the hash; a name never has a slash, so a bare one passes too.
+      bare = drv: lib.concatStringsSep "-" (lib.drop 1 (lib.splitString "-" (nameOf drv)));
+      tryName = p: try (builtins.seq p.name p.name);
+      check =
+        name:
+        let
+          held = try pkgs.${name}.drvPath;
+          heldName = tryName pkgs.${name};
+          plainName = if plain ? ${name} then tryName plain.${name} else { success = false; };
+          wanted = map (r: r.value) (
+            lib.filter (r: r.success) [
+              heldName
+              plainName
+            ]
+          );
+        in
+        if !held.success || wanted == [ ] then
+          [ ]
+        else
+          lib.filter (drv: drv != held.value && lib.elem (bare drv) wanted) closure;
+    in
+    lib.filterAttrs (_: drvs: drvs != [ ]) (
+      lib.genAttrs (lib.filter (name: pkgs ? ${name}) names) check
+    );
 in
 {
-  inherit packages;
+  inherit packages unreached;
 
   # A NixOS configuration as a target (nixDetourTargets): when its toplevel
   # fails to evaluate, the package to hold is found from the error's trace,

@@ -430,6 +430,63 @@ let
         true
       ];
     };
+    # fixedPkgs holds hello from current with a patch; held from stable.
+    testUnreachedUnheldCopy = {
+      expr = watch.unreached {
+        pkgs = fixedPkgs;
+        plain = pkgs;
+        names = [ "hello" ];
+        closure = [
+          fixedPkgs.hello.drvPath
+          pkgs.hello.drvPath
+        ];
+      };
+      expected = {
+        hello = [ pkgs.hello.drvPath ];
+      };
+    };
+    testUnreachedOnlyHeld = {
+      expr = watch.unreached {
+        pkgs = fixedPkgs;
+        plain = pkgs;
+        names = [ "hello" ];
+        closure = [
+          fixedPkgs.hello.drvPath
+          pkgs.hello.src.drvPath
+        ];
+      };
+      expected = { };
+    };
+    testUnreachedOtherVersion = {
+      expr = watch.unreached {
+        pkgs = held;
+        plain = pkgs;
+        names = [
+          "hello"
+          "not-in-pkgs"
+        ];
+        closure = [
+          held.hello.drvPath
+          pkgs.hello.drvPath
+        ];
+      };
+      expected = {
+        hello = [ pkgs.hello.drvPath ];
+      };
+    };
+    # Can't tell an override of the held package from an unheld copy: listed,
+    # and the report says it may be either.
+    testUnreachedOverrideOfHeld = {
+      expr = watch.unreached {
+        pkgs = fixedPkgs;
+        plain = pkgs;
+        names = [ "hello" ];
+        closure = [ (fixedPkgs.hello.overrideAttrs { DETOUR_TEST = "1"; }).drvPath ];
+      };
+      expected = {
+        hello = [ (fixedPkgs.hello.overrideAttrs { DETOUR_TEST = "1"; }).drvPath ];
+      };
+    };
     testFixCurrentKeepsVersion = {
       expr = fixedPkgs.hello.version;
       expected = pkgs.hello.version;
