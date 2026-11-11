@@ -222,6 +222,40 @@ need `--override-input`; `systems: x86_64-linux aarch64-linux` checks other
 systems' hosts from the same runner (evaluation only, builds need the
 runner's system).
 
+### Every change of nixpkgs, not only your scheduled update
+
+A scheduled update is not the only way nixpkgs moves: a hand-made PR that
+bumps it (for one package's fix, say) brings everything else along, and the
+scheduled run after it sees no new nixpkgs to check. Run the action on every
+PR that touches the lock too; `skip-unmoved: true` makes it a no-op unless
+the PR moves `input` from `base`'s revision:
+
+```yaml
+on:
+  pull_request:
+    paths: [flake.lock]
+jobs:
+  detour:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@<sha>
+      # install Nix
+      - uses: kleinbem-dev/nix-detour/update@<sha>
+        id: holds
+        with:
+          skip-unmoved: true
+          base: ${{ github.base_ref }}
+          build: true       # fetches misses packages that fail to compile
+      # unavailable: a download failed, so those weren't checked
+      - if: steps.holds.outputs.held != '' || steps.holds.outputs.failed != '' || steps.holds.outputs.unavailable != ''
+        run: exit 1         # or comment steps.holds.outputs.report on the PR
+```
+
+`build: fetches` finds stale hashes but not a package that fails while
+compiling (a changed setup hook, a missing build input). On a PR that moves
+nixpkgs, build: a broken package usually fails in minutes, and what a
+substituter has isn't built.
+
 Holds kept in another repository (one list shared by several flakes):
 
 ```yaml
