@@ -8,6 +8,11 @@
   module installed buzz-app from its own flake's `packages`. `lib.watch.unreached`
   is the check in Nix.
 
+- Update action: `skip-unmoved: true` does nothing unless the lock moves
+  `input` from `base`'s revision (new `moved` output), so the action can run
+  on every PR that touches the lock. On 2026-11-11 a hand-made nixpkgs bump
+  in kleinbem/nix-config#737 broke five packages that no update run saw.
+
 - hold-release action: `open-prs: false` only checks, and the new `held`
   output lists the holds that still fail. Pass another system's `held` to
   `keep` so a hold goes only when it builds on every system you use.

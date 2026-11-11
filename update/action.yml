@@ -45,6 +45,13 @@ inputs:
   systems:
     description: The systems to check, separated by spaces (default the runner's); any system evaluates, only the runner's builds
     default: ""
+  skip-unmoved:
+    description: >-
+      "true": do nothing unless this checkout's flake.lock has another
+      revision of `input` than `base`'s, so the action can run on every PR
+      that touches the lock (a hand-made nixpkgs bump too) and only checks
+      the ones that move nixpkgs
+    default: "false"
   build:
     description: >-
       Build the watched packages no substituter has; "fetches" builds only
@@ -67,14 +74,28 @@ outputs:
   unreached:
     description: Held packages a target still has unheld, from a package set the holds overlay doesn't reach (so the hold can't fix it there), separated by spaces
     value: ${{ steps.hold.outputs.unreached }}
+  moved:
+    description: '"true" when the lock moves `input` from `base`''s revision ("true" too without skip-unmoved, which doesn''t compare)'
+    value: ${{ steps.moved.outputs.moved }}
   report:
     description: A Markdown report of all of these
     value: ${{ steps.hold.outputs.report }}
 runs:
   using: composite
   steps:
+    - name: Did the lock move nixpkgs
+      id: moved
+      shell: bash
+      working-directory: ${{ inputs.directory }}
+      env:
+        SKIP_UNMOVED: ${{ inputs.skip-unmoved }}
+        FLAKE: ${{ inputs.flake }}
+        INPUT: ${{ inputs.input }}
+        BASE: ${{ inputs.base }}
+      run: '"$GITHUB_ACTION_PATH/../scripts/moved.sh"'
+
     - name: Clone the holds repository
-      if: inputs.holds-repo != ''
+      if: steps.moved.outputs.moved == 'true' && inputs.holds-repo != ''
       shell: bash
       working-directory: ${{ inputs.directory }}
       env:
@@ -87,6 +108,7 @@ runs:
       run: '"$GITHUB_ACTION_PATH/../scripts/clone-holds.sh"'
 
     - name: Find what the update broke
+      if: steps.moved.outputs.moved == 'true'
       shell: bash
       working-directory: ${{ inputs.directory }}
       env:
@@ -106,6 +128,7 @@ runs:
 
     - name: Hold them on the previous nixpkgs
       id: hold
+      if: steps.moved.outputs.moved == 'true'
       shell: bash
       working-directory: ${{ inputs.directory }}
       env:
