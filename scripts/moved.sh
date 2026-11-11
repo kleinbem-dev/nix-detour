@@ -15,16 +15,19 @@ out() {
 # Walks the input path through the lock, follows included (as clone-holds.sh).
 # shellcheck disable=SC2016  # a jq program
 rev() {
-  jq -er --arg i "$INPUT" '. as $lock | def nodeof($segs): reduce $segs[] as $s ($lock.root // "root";
+  jq -r --arg i "$INPUT" '. as $lock | def nodeof($segs): reduce $segs[] as $s ($lock.root // "root";
     if . == null then null else ($lock.nodes[.].inputs[$s] // null)
     | if type == "array" then nodeof(.) else . end end);
-    $lock.nodes[nodeof($i | split("/"))].locked.rev'
+    $lock.nodes[nodeof($i | split("/"))].locked | .rev // .narHash // empty'
 }
 git fetch -q --depth 1 origin "$BASE" || { echo "cannot fetch $BASE from origin" >&2; exit 1; }
 # ./ makes the path relative to this directory, like FLAKE.
-before=$(git show "FETCH_HEAD:./${FLAKE%/}/flake.lock" | rev) || { echo "no input $INPUT in $BASE's flake.lock" >&2; exit 1; }
-after=$(rev <"${FLAKE%/}/flake.lock") || { echo "no input $INPUT in ${FLAKE%/}/flake.lock" >&2; exit 1; }
-if [[ $before == "$after" ]]; then
+# A revision, or the narHash of a tarball input; empty when neither is there.
+before=$(git show "FETCH_HEAD:./${FLAKE%/}/flake.lock" | rev) || { echo "cannot read $BASE's flake.lock" >&2; exit 1; }
+after=$(rev <"${FLAKE%/}/flake.lock") || { echo "cannot read ${FLAKE%/}/flake.lock" >&2; exit 1; }
+if [[ -z $before || -z $after ]]; then
+  out true "$INPUT has no revision or narHash to compare: checking."
+elif [[ $before == "$after" ]]; then
   out false "$INPUT stays at ${after:0:12}: nothing to check."
 else
   out true "$INPUT moves ${before:0:12} -> ${after:0:12}."
