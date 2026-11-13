@@ -4,44 +4,6 @@
 @import "@kleinbem/web-config/base.css";
 @import "@kleinbem/web-config/badges.css";
 
-/* Bind Tailwind 4 color utilities inline so var(--color-*) resolves dynamically across light and dark themes. */
-@theme inline {
-  --color-bg: var(--color-bg);
-  --color-surface: var(--color-surface);
-  --color-surface-high: var(--color-surface-high);
-  --color-line: var(--color-line);
-  --color-outline: var(--color-outline);
-  --color-heading: var(--color-heading);
-  --color-fg: var(--color-fg);
-  --color-muted: var(--color-muted);
-
-  --color-accent: var(--color-accent);
-  --color-accent-hover: var(--color-accent-hover);
-  --color-accent-fg: var(--color-accent-fg);
-  --color-accent-soft: var(--color-accent-soft);
-  --color-accent-soft-fg: var(--color-accent-soft-fg);
-
-  --color-status-success: var(--color-status-success);
-  --color-status-success-soft: var(--color-status-success-soft);
-  --color-status-success-border: var(--color-status-success-border);
-
-  --color-status-warning: var(--color-status-warning);
-  --color-status-warning-soft: var(--color-status-warning-soft);
-  --color-status-warning-border: var(--color-status-warning-border);
-
-  --color-status-danger: var(--color-status-danger);
-  --color-status-danger-soft: var(--color-status-danger-soft);
-  --color-status-danger-border: var(--color-status-danger-border);
-
-  --color-status-info: var(--color-status-info);
-  --color-status-info-soft: var(--color-status-info-soft);
-  --color-status-info-border: var(--color-status-info-border);
-
-  --color-status-ai: var(--color-status-ai);
-  --color-status-ai-soft: var(--color-status-ai-soft);
-  --color-status-ai-border: var(--color-status-ai-border);
-}
-
 @custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *, .dark, .dark *));
 
 dialog::backdrop {

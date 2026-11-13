@@ -733,7 +733,7 @@ in
         )
 
         # --version, malformed since in list, corrupt JSON in top-level list, and flag-name rejection
-        test "$(nix-detour --version)" = "nix-detour 0.3.1"
+        test "$(nix-detour --version)" = "nix-detour ${nix-detour.version}"
         if nix-detour hold add --reason r --from stable -- --evil 2>/dev/null; then echo "flag-like package name should fail" >&2; exit 1; fi
         mkdir -p bad_since && (
           cd bad_since

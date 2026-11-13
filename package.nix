@@ -18,7 +18,7 @@
 
 stdenvNoCC.mkDerivation (finalAttrs: {
   pname = "nix-detour";
-  version = "0.3.1";
+  version = "0.4.0";
 
   src = lib.fileset.toSource {
     root = ./.;
@@ -35,7 +35,7 @@ stdenvNoCC.mkDerivation (finalAttrs: {
     inherit (finalAttrs) pname version src;
     sourceRoot = "${finalAttrs.src.name}/web";
     fetcherVersion = 2;
-    hash = "sha256-xtjUSz2tyE3GBOW+JtCSyXO6bRmZ9nbZo0M6+Hmzt1A=";
+    hash = "sha256-n8grGEjz5TPxwltp+56YCmXLEGW0XT3UW7e13z2jCHc=";
   };
 
   npmRoot = "web";
