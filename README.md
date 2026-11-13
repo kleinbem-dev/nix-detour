@@ -342,12 +342,21 @@ nixpkgs doesn't know, and the module's options are documented either way.
 prs = ./nixpkgs-prs.json; }` gives the same.
 
 ```sh
+# Add from PR number or URL: repo, latest commit, and package attrs are auto-detected
+nix run github:kleinbem-dev/nix-detour -- pr add 587609
+nix run github:kleinbem-dev/nix-detour -- pr add https://github.com/NixOS/nixpkgs/pull/587609
+
+# Or specify custom options (name, unexported scope, or custom paths):
 nix run github:kleinbem-dev/nix-detour -- pr add mesh-llm --pr 571722 \
   --repo you/nixpkgs --attrs mesh-llm,skippy --rev <full sha> \
   --module mesh-llm=nixos/modules/services/misc/mesh-llm.nix
-nix run github:kleinbem-dev/nix-detour -- pr pin mesh-llm <newer full sha>
+
+# Re-pin to latest upstream commit (or pass a full SHA):
+nix run github:kleinbem-dev/nix-detour -- pr pin mesh-llm
+nix run github:kleinbem-dev/nix-detour -- pr pin --all    # update all entries to latest commits
+
 nix run github:kleinbem-dev/nix-detour -- pr list
-nix run github:kleinbem-dev/nix-detour -- pr check    # check upstream PR state and channel landing
+nix run github:kleinbem-dev/nix-detour -- pr check    # check upstream PR state and channel landing (parallel)
 nix run github:kleinbem-dev/nix-detour -- pr merged   # which entries can go
 ```
 
