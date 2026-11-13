@@ -118,8 +118,8 @@ nix run github:kleinbem-dev/nix-detour -- web --port 3000 --data-dir ./my-config
 
 Launches an interactive local Svelte 5 dashboard to visualize active holds,
 fixes, and PR detours across your fleet. It provides live two-way sync with
-`held-packages.json` and `nixpkgs-prs.json` (with automatic discovery across workspace
-repos), queries upstream GitHub PR states and channel landing in real-time, displays
+`held-packages.json` and `nixpkgs-prs.json` (in the current directory, enclosing
+git repository root, or `--data-dir`), queries upstream GitHub PR states and channel landing in real-time, displays
 status badges (Draft, Open, Merged, In Channel), provides a dedicated "Ready" filter,
 and offers one-click release and CLI copy actions.
 
@@ -321,6 +321,8 @@ or a newer version, the entry goes and nixpkgs' package takes over.
 | `scope` | optional: packages of the PR that `attrs` need but that stay unexported |
 | `pythonPackages` | optional: Python packages of the PR, added to every Python package set (from `pkgs/development/python-modules/<name>`, or `paths."python3Packages.<name>"`); they find the entry's `attrs` first |
 | `modules` | optional: NixOS modules of the PR, `{ name = path in the PR; }` |
+| `upstream` | optional: upstream GitHub repository (`OWNER/REPO`, default: `NixOS/nixpkgs`) |
+| `untilChannel` | optional: branch or channel monitored by `pr check` and the web dashboard (default: `nixos-unstable`) |
 
 ```nix
 # outputs

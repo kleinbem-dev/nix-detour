@@ -4,83 +4,59 @@
 
   interface Props {
     items: DetourItem[];
-    prStatuses: Record<number, PrStatusInfo>;
+    getPrStatus: (item: DetourItem) => PrStatusInfo | undefined;
     onSelect: (item: DetourItem) => void;
     onRelease?: (item: DetourItem) => void;
     onTagClick?: (tag: string) => void;
-    onStatusUpdate?: (prNumber: number, status: PrStatusInfo) => void;
   }
 
-  let { items, prStatuses, onSelect, onRelease, onTagClick, onStatusUpdate }: Props = $props();
-
-  const requestedPrs = new Set<number>();
-
-  $effect(() => {
-    if (onStatusUpdate) {
-      for (const item of items) {
-        if (item.kind === 'pr' && item.prNumber && !prStatuses[item.prNumber] && !requestedPrs.has(item.prNumber)) {
-          const pr = item.prNumber;
-          requestedPrs.add(pr);
-          fetch(`/api/pr-status?pr=${pr}`)
-            .then((r) => (r.ok ? r.json() : null))
-            .then((data: PrStatusInfo | null) => {
-              if (data) {
-                onStatusUpdate(pr, data);
-              }
-            })
-            .catch(() => {});
-        }
-      }
-    }
-  });
+  let { items, getPrStatus, onSelect, onRelease, onTagClick }: Props = $props();
 
   let copiedItem = $state<string | null>(null);
   let copiedCommand = $state<string | null>(null);
+  let confirmingItem = $state<string | null>(null);
+  let confirmTimer: ReturnType<typeof setTimeout> | null = null;
 
-  async function copyName(e: MouseEvent, name: string) {
-    e.stopPropagation();
+  async function copyName(name: string) {
     try {
       await navigator.clipboard.writeText(name);
-    } catch {
-      return;
-    }
-    copiedItem = name;
-    setTimeout(() => {
-      if (copiedItem === name) copiedItem = null;
-    }, 1500);
+      copiedItem = name;
+      setTimeout(() => {
+        if (copiedItem === name) copiedItem = null;
+      }, 1500);
+    } catch {}
   }
 
-  async function copyCliCommand(e: MouseEvent, name: string) {
-    e.stopPropagation();
+  async function copyCliCommand(name: string) {
     const arg = /^[a-zA-Z0-9_.-]+$/.test(name) ? name : shQuote(name);
     try {
       await navigator.clipboard.writeText(`nix-detour release ${arg}`);
-    } catch {
+      copiedCommand = name;
+      setTimeout(() => {
+        if (copiedCommand === name) copiedCommand = null;
+      }, 1500);
+    } catch {}
+  }
+
+  function handleReleaseClick(item: DetourItem) {
+    if (confirmingItem !== item.id) {
+      confirmingItem = item.id;
+      if (confirmTimer) clearTimeout(confirmTimer);
+      confirmTimer = setTimeout(() => {
+        if (confirmingItem === item.id) confirmingItem = null;
+      }, 4000);
       return;
     }
-    copiedCommand = name;
-    setTimeout(() => {
-      if (copiedCommand === name) copiedCommand = null;
-    }, 1500);
-  }
-
-  function handleRelease(e: MouseEvent, item: DetourItem) {
-    e.stopPropagation();
-    if (confirm(`Are you sure you want to release and retire detour for "${item.name}"?`)) {
-      onRelease?.(item);
-    }
-  }
-
-  function handleTagClick(e: MouseEvent, tag: string) {
-    e.stopPropagation();
-    onTagClick?.(tag);
+    if (confirmTimer) clearTimeout(confirmTimer);
+    confirmingItem = null;
+    onRelease?.(item);
   }
 </script>
 
-<div class="overflow-x-auto rounded-2xl border border-stone-800/80 bg-stone-900/50 shadow-md">
+<div class="overflow-x-auto rounded-2xl border border-line bg-surface shadow-xs">
   <table class="w-full text-left border-collapse">
     <thead>
-      <tr class="border-b border-stone-800 bg-stone-900/80 text-[11px] font-mono uppercase tracking-wider text-stone-400">
+      <tr class="border-b border-line bg-surface-high text-[11px] font-mono uppercase tracking-wider text-muted">
         <th scope="col" class="py-3 px-4">Package</th>
         <th scope="col" class="py-3 px-3">Type</th>
         <th scope="col" class="py-3 px-3">Source / Details</th>
@@ -89,45 +65,38 @@
         <th scope="col" class="py-3 px-4 text-right">Actions</th>
       </tr>
     </thead>
-    <tbody class="divide-y divide-stone-800/50 text-xs">
+    <tbody class="divide-y divide-line text-xs">
       {#each items as item (item.id)}
-        {@const status = item.prNumber ? prStatuses[item.prNumber] : null}
-        <tr
-          role="button"
-          tabindex="0"
-          onclick={() => onSelect(item)}
-          onkeydown={(e) => {
-            if (e.target !== e.currentTarget) return;
-            if (e.key === 'Enter' || e.key === ' ') {
-              e.preventDefault();
-              onSelect(item);
-            }
-          }}
-          class="group hover:bg-stone-800/50 transition cursor-pointer"
-        >
+        {@const status = getPrStatus(item)}
+        <tr class="group hover:bg-surface-high/60 transition">
           <!-- Package Name & Quick Copy -->
-          <td class="py-3 px-4 font-mono font-medium text-stone-100">
+          <td class="py-3 px-4 font-mono font-medium">
             <div class="flex items-center gap-2">
-              <span class="text-sm font-bold text-stone-100 group-hover:text-amber-300 transition">
-                {item.name}
-              </span>
               <button
                 type="button"
-                onclick={(e) => copyName(e, item.name)}
+                onclick={() => onSelect(item)}
+                class="text-sm font-bold text-heading hover:text-accent transition text-left cursor-pointer"
+              >
+                {item.name}
+              </button>
+              <button
+                type="button"
+                onclick={() => copyName(item.name)}
+                aria-label="Copy package name {item.name}"
                 title="Copy package name"
-                class="opacity-0 group-hover:opacity-100 hover:text-stone-200 text-stone-500 transition p-0.5 rounded cursor-pointer"
+                class="opacity-0 group-hover:opacity-100 focus-visible:opacity-100 hover:text-heading text-muted transition p-0.5 rounded cursor-pointer"
               >
                 {#if copiedItem === item.name}
-                  <span class="text-emerald-400 text-xs font-sans">✓</span>
+                  <span class="text-status-success text-xs font-sans">✓</span>
                 {:else}
-                  <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
                   </svg>
                 {/if}
               </button>
             </div>
             {#if item.reason}
-              <div class="text-[11px] font-sans text-stone-400 truncate max-w-xs mt-0.5" title={item.reason}>
+              <div class="text-[11px] font-sans text-muted truncate max-w-xs mt-0.5" title={item.reason}>
                 {item.reason}
               </div>
             {/if}
@@ -136,42 +105,32 @@
           <!-- Type badge -->
           <td class="py-3 px-3 shrink-0">
             {#if item.kind === 'hold'}
-              <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md text-[10px] font-mono font-bold bg-cyan-950/70 text-cyan-300 border border-cyan-800/60">
-                <span class="w-1.5 h-1.5 rounded-full bg-cyan-400"></span>
-                HOLD
-              </span>
+              <span class="badge badge-info !py-0.5 !px-2 !text-[10px] font-bold">HOLD</span>
             {:else if item.kind === 'fix'}
-              <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md text-[10px] font-mono font-bold bg-amber-950/70 text-amber-300 border border-amber-800/60">
-                <span class="w-1.5 h-1.5 rounded-full bg-amber-400"></span>
-                FIX
-              </span>
+              <span class="badge badge-warning !py-0.5 !px-2 !text-[10px] font-bold">FIX</span>
             {:else}
-              <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md text-[10px] font-mono font-bold bg-emerald-950/70 text-emerald-300 border border-emerald-800/60">
-                <span class="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
-                PR #{item.prNumber}
-              </span>
+              <span class="badge badge-success !py-0.5 !px-2 !text-[10px] font-bold">PR #{item.prNumber}</span>
             {/if}
           </td>
 
           <!-- Source / Details -->
-          <td class="py-3 px-3 text-stone-300 font-mono text-[11px]">
+          <td class="py-3 px-3 text-fg font-mono text-[11px]">
             <div class="flex items-center gap-2">
               {#if item.kind === 'pr'}
                 <a
-                  href={item.link || `https://github.com/${item.owner}/${item.repo}/pull/${item.prNumber}`}
+                  href={item.link || `https://github.com/${item.upstream || 'NixOS/nixpkgs'}/pull/${item.prNumber}`}
                   target="_blank"
-                  rel="noreferrer"
-                  onclick={(e) => e.stopPropagation()}
-                  class="text-emerald-400 hover:text-emerald-300 hover:underline truncate max-w-xs"
+                  rel="noopener noreferrer"
+                  class="text-status-info hover:underline truncate max-w-xs"
                 >
                   {item.owner}/{item.repo}#{item.prNumber}
                 </a>
               {:else}
-                <span class="text-stone-300 truncate max-w-xs">
+                <span class="text-fg truncate max-w-xs">
                   {item.sourceLabel || item.fullSource || 'pinned'}
                 </span>
                 {#if item.patches && item.patches.length > 0}
-                  <span class="text-[10px] px-1.5 py-0.2 rounded bg-amber-950/60 text-amber-400 border border-amber-900/50">
+                  <span class="badge badge-warning !py-0 !px-1.5 !text-[10px]">
                     +{item.patches.length} patch{item.patches.length > 1 ? 'es' : ''}
                   </span>
                 {/if}
@@ -179,17 +138,17 @@
             </div>
             {#if item.attrs && item.attrs.length > 0}
               <div class="flex items-center gap-1 mt-1 overflow-hidden">
-                {#each item.attrs.slice(0, 2) as attr}
+                {#each item.attrs.slice(0, 2) as attr (attr)}
                   <button
                     type="button"
-                    onclick={(e) => handleTagClick(e, attr)}
-                    class="text-[10px] font-mono px-1 py-0.2 rounded bg-stone-800/80 text-stone-400 hover:text-stone-200 hover:bg-stone-700 transition cursor-pointer"
+                    onclick={() => onTagClick?.(attr)}
+                    class="text-[10px] font-mono px-1.5 py-0.5 rounded bg-surface-high border border-line text-muted hover:text-heading transition cursor-pointer"
                   >
                     {attr}
                   </button>
                 {/each}
                 {#if item.attrs.length > 2}
-                  <span class="text-[10px] text-stone-500 font-mono">+{item.attrs.length - 2}</span>
+                  <span class="text-[10px] text-muted font-mono">+{item.attrs.length - 2}</span>
                 {/if}
               </div>
             {/if}
@@ -198,21 +157,19 @@
           <!-- Age -->
           <td class="py-3 px-3 font-mono shrink-0">
             <div class="flex items-center gap-1.5">
-              {#if item.ageDays > 0 || item.since}
-                <span class="text-stone-200 {item.ageDays > 14 ? 'text-rose-400 font-bold' : ''}">
+              {#if item.ageDays > 0 || (item.since && item.since !== 'unknown')}
+                <span class={item.ageDays > 14 ? 'text-status-danger font-bold' : 'text-heading'}>
                   {item.ageDays}d
                 </span>
                 {#if item.ageDays > 14}
-                  <span class="px-1.5 py-0.2 rounded text-[10px] uppercase font-bold bg-rose-950/80 text-rose-300 border border-rose-800/60">
-                    stale
-                  </span>
+                  <span class="badge badge-danger !py-0 !px-1.5 !text-[10px] uppercase font-bold">stale</span>
                 {/if}
               {:else}
-                <span class="text-stone-500 text-[11px]">-</span>
+                <span class="text-muted text-[11px]">—</span>
               {/if}
             </div>
-            {#if item.since}
-              <div class="text-[10px] text-stone-500">{item.since}</div>
+            {#if item.since && item.since !== 'unknown'}
+              <div class="text-[10px] text-muted">{item.since}</div>
             {/if}
           </td>
 
@@ -221,72 +178,82 @@
             {#if item.kind === 'pr'}
               {#if status}
                 {#if status.status === 'in-channel'}
-                  <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-mono font-bold bg-emerald-900/60 text-emerald-300 border border-emerald-500/50 shadow-sm shadow-emerald-500/10">
-                    <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                  <span class="badge badge-success !py-0.5 !px-2 !text-[10px] font-bold">
+                    <span class="w-1.5 h-1.5 rounded-full bg-status-success animate-pulse" aria-hidden="true"></span>
                     In Channel (Ready)
                   </span>
                 {:else if status.status === 'merged'}
-                  <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-mono font-semibold bg-purple-950/70 text-purple-300 border border-purple-800/50">
-                    <span class="w-1.5 h-1.5 rounded-full bg-purple-400"></span>
-                    Merged Upstream
-                  </span>
+                  <span class="badge badge-ai !py-0.5 !px-2 !text-[10px] font-semibold">Merged Upstream</span>
                 {:else if status.status === 'open'}
-                  <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-mono font-semibold bg-blue-950/70 text-blue-300 border border-blue-800/50">
-                    <span class="w-1.5 h-1.5 rounded-full bg-blue-400"></span>
-                    PR Open
-                  </span>
+                  <span class="badge badge-info !py-0.5 !px-2 !text-[10px] font-semibold">PR Open</span>
                 {:else if status.status === 'draft'}
-                  <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-mono text-stone-400 bg-stone-800/60 border border-stone-700/50">
-                    Draft PR
-                  </span>
+                  <span class="badge badge-warning !py-0.5 !px-2 !text-[10px]">Draft PR</span>
+                {:else if status.status === 'closed'}
+                  <span class="badge badge-danger !py-0.5 !px-2 !text-[10px]">Closed</span>
                 {:else}
-                  <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-mono text-stone-400 bg-stone-800/60 border border-stone-700/50">
-                    {status.status}
-                  </span>
+                  <span class="badge badge-muted !py-0.5 !px-2 !text-[10px]">{status.status}</span>
                 {/if}
               {:else}
-                <span class="text-stone-500 font-mono text-[11px]">—</span>
+                <span class="text-muted font-mono text-[11px]">—</span>
               {/if}
             {:else if item.releaseWhen}
-              <div class="text-[11px] font-mono text-stone-300 flex items-center gap-1">
-                <span class="text-stone-500 text-[10px]">until</span>
-                <span class="text-amber-300 font-semibold">{item.releaseWhen}</span>
-                <span class="text-stone-500 text-[10px]">builds</span>
+              <div class="text-[11px] font-mono text-fg flex items-center gap-1">
+                <span class="text-muted text-[10px]">until</span>
+                <span class="text-status-ai font-semibold">{item.releaseWhen}</span>
+                <span class="text-muted text-[10px]">builds</span>
               </div>
             {:else if item.untilVersion}
-              <div class="text-[11px] font-mono text-stone-300 flex items-center gap-1">
-                <span class="text-stone-500 text-[10px]">until</span>
-                <span class="text-cyan-300 font-semibold">v{item.untilVersion}</span>
+              <div class="text-[11px] font-mono text-fg flex items-center gap-1">
+                <span class="text-muted text-[10px]">until</span>
+                <span class="text-status-warning font-semibold">&gt;= {item.untilVersion}</span>
               </div>
             {:else}
-              <span class="text-stone-500 font-mono text-[11px]">manual hold</span>
+              <span class="text-muted font-mono text-[11px]">manual hold</span>
             {/if}
           </td>
 
           <!-- Actions -->
           <td class="py-3 px-4 text-right">
-            <div class="inline-flex items-center gap-1.5" onclick={(e) => e.stopPropagation()}>
+            <div class="inline-flex items-center gap-1.5">
               <button
                 type="button"
-                onclick={(e) => copyCliCommand(e, item.name)}
-                title="Copy release CLI command"
-                class="px-2 py-1 rounded-lg bg-stone-800/80 hover:bg-stone-700 text-stone-300 hover:text-stone-100 text-[11px] font-mono transition cursor-pointer flex items-center gap-1 border border-stone-700/50"
+                onclick={() => onSelect(item)}
+                class="px-2 py-1 rounded-lg bg-surface-high hover:border-outline/50 text-fg hover:text-heading text-[11px] font-mono transition cursor-pointer border border-line"
               >
-                {#if copiedCommand === item.name}
-                  <span class="text-emerald-400 text-xs">✓ Copied</span>
-                {:else}
-                  <span>📋 CLI</span>
-                {/if}
+                Inspect
               </button>
 
               <button
                 type="button"
-                onclick={(e) => handleRelease(e, item)}
-                title={`Release detour '${item.name}'`}
-                class="px-2 py-1 rounded-lg bg-stone-800/80 hover:bg-rose-950/70 hover:border-rose-800/80 text-stone-400 hover:text-rose-300 text-[11px] font-mono transition cursor-pointer border border-stone-700/50"
+                onclick={() => copyCliCommand(item.name)}
+                title="Copy release CLI command"
+                class="px-2 py-1 rounded-lg bg-surface-high hover:border-outline/50 text-fg hover:text-heading text-[11px] font-mono transition cursor-pointer border border-line"
               >
-                Release
+                {#if copiedCommand === item.name}
+                  <span class="text-status-success">✓ Copied</span>
+                {:else}
+                  <span>CLI</span>
+                {/if}
               </button>
+
+              {#if onRelease}
+                <button
+                  type="button"
+                  onclick={() => handleReleaseClick(item)}
+                  onkeydown={(e) => {
+                    if (e.key === 'Escape' && confirmingItem === item.id) {
+                      e.stopPropagation();
+                      confirmingItem = null;
+                    }
+                  }}
+                  title={confirmingItem === item.id ? 'Click again to confirm release' : `Release detour '${item.name}'`}
+                  class="px-2 py-1 rounded-lg text-[11px] font-mono transition cursor-pointer border {confirmingItem === item.id
+                    ? 'bg-status-danger text-bg border-status-danger font-bold'
+                    : 'bg-status-danger-soft text-status-danger border-status-danger-border hover:opacity-90'}"
+                >
+                  {confirmingItem === item.id ? 'Confirm?' : 'Release'}
+                </button>
+              {/if}
             </div>
           </td>
         </tr>

@@ -22,75 +22,34 @@
     currentFilter,
     onFilterChange
   }: Props = $props();
+
+  const cards = $derived([
+    { key: 'all' as DetourFilter, label: 'All Detours', count: total, labelClass: 'text-muted', dotClass: '', pulse: false, activeRing: 'border-accent ring-1 ring-accent/30' },
+    { key: 'ready' as DetourFilter, label: 'Ready', count: readyCount, labelClass: 'text-status-success', dotClass: 'bg-status-success', pulse: readyCount > 0, activeRing: 'border-status-success ring-1 ring-status-success/30' },
+    { key: 'hold' as DetourFilter, label: 'Holds', count: holdsCount, labelClass: 'text-status-info', dotClass: 'bg-status-info', pulse: false, activeRing: 'border-status-info ring-1 ring-status-info/30' },
+    { key: 'fix' as DetourFilter, label: 'Fixes', count: fixesCount, labelClass: 'text-status-warning', dotClass: 'bg-status-warning', pulse: false, activeRing: 'border-status-warning ring-1 ring-status-warning/30' },
+    { key: 'pr' as DetourFilter, label: 'PRs (Ahead)', count: prsCount, labelClass: 'text-status-success', dotClass: 'bg-status-success', pulse: false, activeRing: 'border-status-success ring-1 ring-status-success/30' },
+    { key: 'stale' as DetourFilter, label: 'Stale (>14d)', count: staleCount, labelClass: 'text-status-danger', dotClass: 'bg-status-danger', pulse: staleCount > 0, activeRing: 'border-status-danger ring-1 ring-status-danger/30' }
+  ]);
 </script>
 
-<div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 mb-6">
-  <button
-    type="button"
-    onclick={() => onFilterChange('all')}
-    class="text-left p-3.5 rounded-xl border transition-all cursor-pointer {currentFilter === 'all' ? 'bg-stone-900 border-amber-500/50 shadow-sm ring-1 ring-amber-500/30' : 'bg-stone-900/60 border-stone-800/80 hover:bg-stone-900 hover:border-stone-700'}"
-  >
-    <div class="text-xs uppercase tracking-wider text-stone-400 font-medium">All Detours</div>
-    <div class="text-2xl font-bold font-mono text-stone-100 mt-1">{total}</div>
-  </button>
-
-  <button
-    type="button"
-    onclick={() => onFilterChange('ready')}
-    class="text-left p-3.5 rounded-xl border transition-all cursor-pointer {currentFilter === 'ready' ? 'bg-stone-900 border-emerald-500/50 shadow-sm ring-1 ring-emerald-500/30' : 'bg-stone-900/60 border-stone-800/80 hover:bg-stone-900 hover:border-stone-700'}"
-  >
-    <div class="flex items-center justify-between">
-      <span class="text-xs uppercase tracking-wider text-emerald-400 font-medium">Ready</span>
-      <span class="w-2 h-2 rounded-full bg-emerald-400 {readyCount > 0 ? 'animate-pulse' : ''}"></span>
-    </div>
-    <div class="text-2xl font-bold font-mono text-stone-100 mt-1">{readyCount}</div>
-  </button>
-
-  <button
-    type="button"
-    onclick={() => onFilterChange('hold')}
-    class="text-left p-3.5 rounded-xl border transition-all cursor-pointer {currentFilter === 'hold' ? 'bg-stone-900 border-cyan-500/50 shadow-sm ring-1 ring-cyan-500/30' : 'bg-stone-900/60 border-stone-800/80 hover:bg-stone-900 hover:border-stone-700'}"
-  >
-    <div class="flex items-center justify-between">
-      <span class="text-xs uppercase tracking-wider text-cyan-400 font-medium">Holds</span>
-      <span class="w-2 h-2 rounded-full bg-cyan-400"></span>
-    </div>
-    <div class="text-2xl font-bold font-mono text-stone-100 mt-1">{holdsCount}</div>
-  </button>
-
-  <button
-    type="button"
-    onclick={() => onFilterChange('fix')}
-    class="text-left p-3.5 rounded-xl border transition-all cursor-pointer {currentFilter === 'fix' ? 'bg-stone-900 border-amber-500/50 shadow-sm ring-1 ring-amber-500/30' : 'bg-stone-900/60 border-stone-800/80 hover:bg-stone-900 hover:border-stone-700'}"
-  >
-    <div class="flex items-center justify-between">
-      <span class="text-xs uppercase tracking-wider text-amber-400 font-medium">Fixes</span>
-      <span class="w-2 h-2 rounded-full bg-amber-400"></span>
-    </div>
-    <div class="text-2xl font-bold font-mono text-stone-100 mt-1">{fixesCount}</div>
-  </button>
-
-  <button
-    type="button"
-    onclick={() => onFilterChange('pr')}
-    class="text-left p-3.5 rounded-xl border transition-all cursor-pointer {currentFilter === 'pr' ? 'bg-stone-900 border-emerald-500/50 shadow-sm ring-1 ring-emerald-500/30' : 'bg-stone-900/60 border-stone-800/80 hover:bg-stone-900 hover:border-stone-700'}"
-  >
-    <div class="flex items-center justify-between">
-      <span class="text-xs uppercase tracking-wider text-emerald-400 font-medium">PRs (Ahead)</span>
-      <span class="w-2 h-2 rounded-full bg-emerald-400"></span>
-    </div>
-    <div class="text-2xl font-bold font-mono text-stone-100 mt-1">{prsCount}</div>
-  </button>
-
-  <button
-    type="button"
-    onclick={() => onFilterChange('stale')}
-    class="text-left p-3.5 rounded-xl border transition-all cursor-pointer {currentFilter === 'stale' ? 'bg-stone-900 border-rose-500/50 shadow-sm ring-1 ring-rose-500/30' : 'bg-stone-900/60 border-stone-800/80 hover:bg-stone-900 hover:border-stone-700'}"
-  >
-    <div class="flex items-center justify-between">
-      <span class="text-xs uppercase tracking-wider text-rose-400 font-medium">Stale (&gt;14d)</span>
-      <span class="w-2 h-2 rounded-full bg-rose-400 {staleCount > 0 ? 'animate-pulse' : ''}"></span>
-    </div>
-    <div class="text-2xl font-bold font-mono text-stone-100 mt-1">{staleCount}</div>
-  </button>
+<div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 mb-6" role="group" aria-label="Filter detours by category">
+  {#each cards as card (card.key)}
+    <button
+      type="button"
+      aria-pressed={currentFilter === card.key}
+      onclick={() => onFilterChange(card.key)}
+      class="text-left p-3.5 rounded-xl border transition-all cursor-pointer {currentFilter === card.key
+        ? `bg-surface-high shadow-xs ${card.activeRing}`
+        : 'bg-surface border-line hover:bg-surface-high hover:border-outline/50'}"
+    >
+      <div class="flex items-center justify-between gap-2">
+        <span class="text-xs uppercase tracking-wider font-medium {card.labelClass}">{card.label}</span>
+        {#if card.dotClass}
+          <span class="w-2 h-2 rounded-full {card.dotClass} {card.pulse ? 'animate-pulse' : ''}" aria-hidden="true"></span>
+        {/if}
+      </div>
+      <div class="text-2xl font-bold font-mono text-heading mt-1">{card.count}</div>
+    </button>
+  {/each}
 </div>

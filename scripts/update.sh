@@ -14,6 +14,7 @@
 # one built.
 set -uo pipefail
 
+(($# >= 1)) || { echo "Usage: scripts/update.sh FLAKE [--no-build | --build-fetches] [--only a,b]" >&2; exit 1; }
 flake="$1"
 shift
 build=true only=""
@@ -21,7 +22,7 @@ while (($#)); do
   case "$1" in
     --no-build) build=false; shift ;;
     --build-fetches) build=fetches; shift ;;
-    --only) only="$2"; shift 2 ;;
+    --only) (($# >= 2)) || { echo "--only needs a value" >&2; exit 1; }; only="$2"; shift 2 ;;
     *) echo "unknown option $1" >&2; exit 1 ;;
   esac
 done
@@ -32,8 +33,9 @@ trap 'rm -rf "$tmp"' EXIT
 native=$(nix eval --raw --impure --expr builtins.currentSystem)
 read -ra systems <<<"${NIX_DETOUR_SYSTEMS:-}"
 ((${#systems[@]})) || systems=("$native")
-# shellcheck disable=SC2016  # a Nix expression
-filter='ws: let only = builtins.filter (n: builtins.isString n && n != "") (builtins.split "," "'"$only"'"); in
+only_nix=$(jq -rn --arg s "$only" '$s | split(",") | map(select(. != "")) | tojson | @json | gsub("\\$\\{"; "\\${")')
+# shellcheck disable=SC2016  # Nix expression
+filter='ws: let only = builtins.fromJSON '"$only_nix"'; in
   if only == [ ] then ws else builtins.intersectAttrs (builtins.listToAttrs (map (n: { name = n; value = null; }) only)) ws'
 
 # The innermost error in nix's stderr on stdin, the cause (the outer ones are
@@ -218,11 +220,12 @@ check() {
       err=$(nix eval "${extra[@]}" --show-trace --raw "$flake#$targetsOut.$system.\"$target\".target.drvPath" 2>&1 >/dev/null) && continue
       # The derivations in the trace, innermost first.
       chain=$(grep -oE "while evaluating derivation '[^']+'" <<<"$err" | cut -d"'" -f2 | tac | jq -Rsc 'split("\n") | map(select(. != ""))')
-      # shellcheck disable=SC2016  # a Nix expression
-      name=$(nix eval "${extra[@]}" --raw "$flake#$targetsOut.$system.\"$target\".pkgs" --apply "pkgs: let
-          names = map (d: (builtins.parseDrvName d).name) (builtins.fromJSON ''$chain'');
-          held = builtins.filter (n: pkgs ? \${n} && !(builtins.tryEval pkgs.\${n}.drvPath).success) names;
-        in if held == [ ] then \"\" else builtins.head held" 2>/dev/null)
+      chain_nix=$(jq -rn --arg c "$chain" '$c | @json | gsub("\\$\\{"; "\\${")')
+      # shellcheck disable=SC2016  # Nix expression
+      name=$(nix eval "${extra[@]}" --raw "$flake#$targetsOut.$system.\"$target\".pkgs" --apply 'pkgs: let
+          names = map (d: (builtins.parseDrvName d).name) (builtins.fromJSON '"$chain_nix"');
+          held = builtins.filter (n: pkgs ? ${n} && !(builtins.tryEval pkgs.${n}.drvPath).success) names;
+        in if held == [ ] then "" else builtins.head held' 2>/dev/null)
       why=$(innermost <<<"$err")
       if [[ -n $name ]]; then
         echo "broken $name $why (in $target)"

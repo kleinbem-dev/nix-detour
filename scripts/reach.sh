@@ -11,6 +11,7 @@
 # NIX_DETOUR_OVERRIDE and NIX_DETOUR_SYSTEMS as for update.sh.
 set -uo pipefail
 
+(($# >= 2)) || { echo "Usage: scripts/reach.sh FLAKE HOLDS" >&2; exit 1; }
 flake="$1"
 holds="$2"
 here=$(dirname "$(realpath "$0")")
@@ -39,12 +40,13 @@ for system in "${systems[@]}"; do
       continue
     fi
     grep '\.drv$' "$tmp/closure.txt" | jq -Rsc 'split("\n") | map(select(. != ""))' >"$tmp/closure.json"
-    nix eval "${extra[@]}" --impure --json "$out.\"$target\".pkgs" --apply "pkgs:
-      (import $here/../watch.nix { inherit (pkgs) lib; }).unreached {
-        inherit pkgs;
-        names = builtins.fromJSON ''$names'';
-        closure = builtins.fromJSON (builtins.readFile $tmp/closure.json);
-      }" 2>"$tmp/err" | jq -r --arg t "$target" 'to_entries[] | .key as $n | .value[] | "unreached \($n) \($t) \(.)"' \
+    NIX_DETOUR_WATCH_NIX="$here/../watch.nix" NIX_DETOUR_NAMES="$names" NIX_DETOUR_CLOSURE="$tmp/closure.json" \
+      nix eval "${extra[@]}" --impure --json "$out.\"$target\".pkgs" --apply 'pkgs:
+        (import (/. + builtins.getEnv "NIX_DETOUR_WATCH_NIX") { inherit (pkgs) lib; }).unreached {
+          inherit pkgs;
+          names = builtins.fromJSON (builtins.getEnv "NIX_DETOUR_NAMES");
+          closure = builtins.fromJSON (builtins.readFile (builtins.getEnv "NIX_DETOUR_CLOSURE"));
+        }' 2>"$tmp/err" | jq -r --arg t "$target" 'to_entries[] | .key as $n | .value[] | "unreached \($n) \($t) \(.)"' \
       || echo "unchecked $target $(tail -1 "$tmp/err")"
   done
 done

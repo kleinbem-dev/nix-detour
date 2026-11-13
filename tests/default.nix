@@ -519,6 +519,95 @@ let
         lib = false;
       };
     };
+    testNixosTestsDefaultAndCustom = {
+      expr =
+        let
+          h = mkHolds {
+            inherit nixpkgs-stable;
+            holds = {
+              hello.from = "stable";
+              figlet = {
+                from = "stable";
+                tests = [
+                  "custom1"
+                  "custom2"
+                ];
+              };
+              unrar = {
+                from = "stable";
+                tests = [ ];
+              };
+              jq = {
+                from = "stable";
+                tests = [ "custom1" ];
+              };
+            };
+          };
+          mockPkgs = pkgs // {
+            nixosTests = {
+              hello = "t-hello";
+              figlet = "t-figlet";
+              unrar = "t-unrar";
+              custom1 = "t-c1";
+              custom2 = "t-c2";
+            };
+          };
+        in
+        h.nixosTests mockPkgs;
+      expected = {
+        hello = "t-hello";
+        custom1 = "t-c1";
+        custom2 = "t-c2";
+      };
+    };
+    testExplicitConfigOverridesConsumer = {
+      expr =
+        let
+          explicitHolds = mkHolds {
+            inherit nixpkgs-stable;
+            config = {
+              allowUnfree = true;
+            };
+            holds.unrar.from = "stable";
+          };
+          p = import nixpkgs {
+            inherit system;
+            config = { };
+            overlays = [ explicitHolds.overlay ];
+          };
+        in
+        (builtins.tryEval p.unrar.drvPath).success;
+      expected = true;
+    };
+    testPrDuplicateAttrRefused = {
+      expr =
+        (builtins.tryEval
+          (mkPrs {
+            fetch = _: ./fake-pr;
+            prs = {
+              a.attrs = [ "hello" ];
+              b.attrs = [ "hello" ];
+            };
+          }).overlay
+        ).success;
+      expected = false;
+    };
+    testWatchPackagesEmpty = {
+      expr = watch.packages {
+        pkgs = brokenPkgs;
+        packages = [ ];
+      };
+      expected = { };
+    };
+    testWatchUnreachedEmptyClosure = {
+      expr = watch.unreached {
+        pkgs = fixedPkgs;
+        plain = pkgs;
+        names = [ "hello" ];
+        closure = [ ];
+      };
+      expected = { };
+    };
   };
 in
 {
@@ -620,6 +709,47 @@ in
         if nix-detour release subpkg --file held-packages.json sub 2>/dev/null; then echo "release with both --file and positional path should fail" >&2; exit 1; fi
         cmp held-packages.json before_release.json
         cmp sub/held-packages.json sub_before_release.json
+
+        # Help, unknown commands, custom --lock / --input, and non-git previous failure
+        nix-detour --help | grep -q 'nix-detour'
+        if nix-detour unknown-cmd 2>/dev/null; then echo "unknown command should fail" >&2; exit 1; fi
+        if nix-detour hold add --bogus-flag 2>/dev/null; then echo "unknown flag should fail" >&2; exit 1; fi
+
+        mkdir -p custom_lock_repo && (
+          cd custom_lock_repo
+          git init -q .
+          jq -n '{
+            root: "root",
+            nodes: {
+              root: { inputs: { mypkgs: "mypkgs", sub: "sub" } },
+              sub: { inputs: { nixpkgs: ["mypkgs"] } },
+              mypkgs: { locked: { rev: "rev1", narHash: "sha256-1" } }
+            }
+          }' > custom.lock
+          git add custom.lock && git commit -qm c1
+          jq '.nodes.mypkgs.locked = {rev: "rev2", narHash: "sha256-2"}' custom.lock > f && mv f custom.lock
+          nix-detour hold add custompkg --lock custom.lock --input sub/nixpkgs --reason "follows input"
+          test "$(jq -c .custompkg.from held-packages.json)" = '{"rev":"rev1","narHash":"sha256-1"}'
+        )
+
+        # --version, malformed since in list, corrupt JSON in top-level list, and flag-name rejection
+        test "$(nix-detour --version)" = "nix-detour 0.3.1"
+        if nix-detour hold add --reason r --from stable -- --evil 2>/dev/null; then echo "flag-like package name should fail" >&2; exit 1; fi
+        mkdir -p bad_since && (
+          cd bad_since
+          echo '{"weird": {"from": "stable", "since": "not-a-date", "reason": "r"}}' > held-packages.json
+          nix-detour hold list | grep -q '^weird  *stable  *not-a-date$'
+          nix-detour list | grep -q '^weird  *stable  *not-a-date$'
+          echo '{corrupt' > held-packages.json
+          if nix-detour list 2>/dev/null; then echo "top-level list on corrupt JSON should fail" >&2; exit 1; fi
+        )
+
+        mkdir -p nogit && (
+          cd nogit
+          echo '{}' > flake.lock
+          if nix-detour hold add p --reason r 2>/dev/null; then echo "previous outside git repo should fail" >&2; exit 1; fi
+        )
+
         touch $out
       '';
 
@@ -634,6 +764,9 @@ in
       }
       ''
                 set -euo pipefail
+                nix-detour pr --help | grep -q 'nix-detour pr'
+                if nix-detour pr bogus 2>/dev/null; then echo "unknown pr subcommand should fail" >&2; exit 1; fi
+
                 nix-detour pr add mesh --pr 571722 --repo someone/nixpkgs --attrs mesh-llm,skippy \
                   --scope skippy-runtime --module mesh-llm=nixos/modules/services/misc/mesh-llm.nix
                 test "$(jq -c .mesh nixpkgs-prs.json)" = '{"pr":571722,"owner":"someone","repo":"nixpkgs","rev":"","narHash":"","attrs":["mesh-llm","skippy"],"scope":["skippy-runtime"],"modules":{"mesh-llm":"nixos/modules/services/misc/mesh-llm.nix"}}'
@@ -656,21 +789,37 @@ in
                 # A --rev that can't be pinned adds nothing.
                 if nix-detour pr add x --pr 3 --repo a/b --attrs x --rev abc 2>/dev/null; then echo "add with a short --rev should fail" >&2; exit 1; fi
                 test "$(jq -r 'has("x")' nixpkgs-prs.json)" = false
+
+                # Corrupt nixpkgs-prs.json stays untouched on error
+                echo '{ bad json' > bad-prs.json
+                if nix-detour pr add x --pr 3 --repo a/b --attrs x --file bad-prs.json 2>/dev/null; then echo "pr add on corrupt json should fail" >&2; exit 1; fi
+                test "$(cat bad-prs.json)" = '{ bad json'
+                if nix-detour pr remove mesh --file bad-prs.json 2>/dev/null; then echo "pr remove on corrupt json should fail" >&2; exit 1; fi
+                test "$(cat bad-prs.json)" = '{ bad json'
+
                 nix-detour pr remove berd
                 test "$(jq -r 'keys | join(",")' nixpkgs-prs.json)" = mesh
                 if nix-detour pr remove berd 2>/dev/null; then echo "removing a missing entry should fail" >&2; exit 1; fi
 
                 # PR check command with mock gh
                 cat << 'EOF' > gh
-        #!/bin/sh
+        #!${pkgs.runtimeShell}
         if [ "$2" = "repos/NixOS/nixpkgs/pulls/571722" ]; then
           echo '{"state":"open","draft":false,"merged":false,"title":"mesh-llm"}'
         elif [ "$2" = "repos/NixOS/nixpkgs/pulls/100" ]; then
           echo '{"state":"closed","draft":false,"merged":true,"merge_commit_sha":"abc12345","title":"merged-landing"}'
+        elif [ "$2" = "repos/NixOS/nixpkgs/pulls/101" ]; then
+          echo '{"state":"open","draft":true,"merged":false,"title":"wip-pkg"}'
+        elif [ "$2" = "repos/NixOS/nixpkgs/pulls/102" ]; then
+          echo '{"state":"closed","draft":false,"merged":true,"merge_commit_sha":"notyet00","title":"merged-waiting"}'
+        elif [ "$2" = "repos/NixOS/nixpkgs/pulls/103" ]; then
+          echo '{"state":"closed","draft":false,"merged":false,"title":"abandoned-pkg"}'
         elif [ "$2" = "repos/NixOS/nixpkgs/pulls/999" ]; then
           echo '{"state":"open","draft":false,"merged":false,"title":"subpr"}'
         elif [ "$2" = "repos/NixOS/nixpkgs/compare/nixos-unstable...abc12345" ]; then
           echo '{"status":"behind"}'
+        elif [ "$2" = "repos/NixOS/nixpkgs/compare/nixos-unstable...notyet00" ]; then
+          echo '{"status":"ahead"}'
         elif [ "$2" = "repos/NixOS/nixpkgs/pulls/500" ]; then
           echo '{"head":{"repo":{"full_name":"autouser/nixpkgs"},"sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"title":"autopkg: init at 1.0.0"}'
         elif [ "$2" = "repos/NixOS/nixpkgs/pulls/500/files" ]; then
@@ -679,12 +828,18 @@ in
           echo '{"head":{"repo":{"full_name":"autouser/nixpkgs"},"sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},"title":"otherpkg: init at 0.1.0"}'
         elif [ "$2" = "repos/NixOS/nixpkgs/pulls/501/files" ]; then
           echo '[{"filename":"pkgs/by-name/ot/otherpkg/package.nix"}]'
+        elif [ "$2" = "repos/custom/nixpkgs/pulls/502" ]; then
+          echo '{"head":{"repo":{"full_name":"pyuser/nixpkgs"},"sha":"cccccccccccccccccccccccccccccccccccccccc"},"title":"python3Packages.pyfoo: init at 1.0"}'
+        elif [ "$2" = "repos/custom/nixpkgs/pulls/502/files" ]; then
+          echo '[]'
+        else
+          exit 1
         fi
         EOF
                 chmod +x gh
 
                 cat << 'EOF' > nix
-        #!/bin/sh
+        #!${pkgs.runtimeShell}
         if [ "$1" = "flake" ] && [ "$2" = "prefetch" ]; then
           echo '{"hash":"sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="}'
         fi
@@ -698,6 +853,22 @@ in
                 test "$(jq -r .autopkg.narHash nixpkgs-prs.json)" = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
                 test "$(jq -r '.autopkg.attrs | first' nixpkgs-prs.json)" = "autopkg"
                 test "$(jq -r .autopkg.modules.autopkg nixpkgs-prs.json)" = "nixos/modules/services/misc/autopkg.nix"
+
+                # --python with custom --path, --upstream, --channel (untilChannel), --no-pin
+                PATH=".:$PATH" nix-detour pr add pyfoo --pr 502 --upstream custom/nixpkgs --python py-foo \
+                  --path python3Packages.py-foo=pkgs/development/python-modules/py-foo/custom.nix \
+                  --channel nixos-25.05 --no-pin --auto
+                test "$(jq -c .pyfoo.pythonPackages nixpkgs-prs.json)" = '["py-foo"]'
+                test "$(jq -r '.pyfoo.paths["python3Packages.py-foo"]' nixpkgs-prs.json)" = "pkgs/development/python-modules/py-foo/custom.nix"
+                test "$(jq -r .pyfoo.upstream nixpkgs-prs.json)" = "custom/nixpkgs"
+                test "$(jq -r .pyfoo.untilChannel nixpkgs-prs.json)" = "nixos-25.05"
+                test "$(jq -r .pyfoo.rev nixpkgs-prs.json)" = ""
+                nix-detour pr remove pyfoo
+
+                # Empty nixpkgs-prs.json does not crash pr check
+                echo '{}' > empty-prs.json
+                PATH=".:$PATH" nix-detour pr check --file empty-prs.json | grep -q 'no entries'
+                test "$(PATH=".:$PATH" nix-detour pr check --json --file empty-prs.json)" = '{}'
 
                 # Shorthand pr add with full URL
                 PATH=".:$PATH" nix-detour pr add https://github.com/NixOS/nixpkgs/pull/501
@@ -715,8 +886,23 @@ in
 
                 test "$(PATH=".:$PATH" nix-detour pr check --json mesh | jq -r .mesh.status)" = "open"
                 nix-detour pr add landed --pr 100 --repo someone/nixpkgs --attrs landed-pkg
-                test "$(PATH=".:$PATH" nix-detour pr check --json landed | jq -r .landed.status)" = "in-channel"
-                test "$(PATH=".:$PATH" nix-detour pr check --json landed | jq -r .landed.inChannel)" = "true"
+                nix-detour pr add drafty --pr 101 --repo someone/nixpkgs --attrs drafty-pkg
+                nix-detour pr add waiting --pr 102 --repo someone/nixpkgs --attrs waiting-pkg
+                nix-detour pr add closedp --pr 103 --repo someone/nixpkgs --attrs closed-pkg
+                nix-detour pr add offline --pr 404 --repo someone/nixpkgs --attrs offline-pkg
+                checks_json=$(PATH=".:$PATH" nix-detour pr check --json landed drafty waiting closedp offline)
+                test "$(jq -r .landed.status <<<"$checks_json")" = "in-channel"
+                test "$(jq -r .landed.inChannel <<<"$checks_json")" = "true"
+                test "$(jq -r .drafty.status <<<"$checks_json")" = "draft"
+                test "$(jq -r .waiting.status <<<"$checks_json")" = "merged"
+                test "$(jq -r .waiting.inChannel <<<"$checks_json")" = "false"
+                test "$(jq -r .closedp.status <<<"$checks_json")" = "closed"
+                test "$(jq -r .offline.status <<<"$checks_json")" = "unknown"
+                nix-detour pr remove drafty
+                nix-detour pr remove waiting
+                nix-detour pr remove closedp
+                nix-detour pr remove offline
+
                 PATH=".:$PATH" nix-detour check > check_out.txt
                 grep -q '=== PRs ===' check_out.txt
                 grep -q 'landed' check_out.txt
@@ -757,6 +943,244 @@ in
                 touch $out
       '';
 
+  # Action helper scripts: moved.sh, clone-holds.sh, release-check.sh, update.sh, reach.sh, hold.sh.
+  actions =
+    pkgs.runCommand "nix-detour-actions-tests"
+      {
+        nativeBuildInputs = [
+          nix-detour
+          pkgs.bash
+          pkgs.coreutils
+          pkgs.findutils
+          pkgs.gawk
+          pkgs.git
+          pkgs.gnugrep
+          pkgs.gnused
+          pkgs.jq
+        ];
+      }
+      ''
+        set -euo pipefail
+        export HOME=$TMPDIR GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
+        mkdir -p repo_under_test
+        cp -r ${../scripts} repo_under_test/scripts
+        cp ${../watch.nix} repo_under_test/watch.nix
+        chmod -R u+w repo_under_test
+        patchShebangs repo_under_test/scripts
+        scripts=$PWD/repo_under_test/scripts
+
+        # 1. moved.sh: SKIP_UNMOVED=false, unmoved, moved, and follows-array input paths
+        mkdir -p origin_repo work_repo
+        git init -q --bare origin_repo
+        (
+          cd work_repo
+          git init -q -b main .
+          git remote add origin "$PWD/../origin_repo"
+          jq -n '{
+            root: "root",
+            nodes: {
+              root: { inputs: { nixpkgs: "nixpkgs", sub: "sub" } },
+              sub: { inputs: { nixpkgs: ["nixpkgs"] } },
+              nixpkgs: { locked: { rev: "1111111111111111111111111111111111111111", narHash: "sha256-111" } }
+            }
+          }' > flake.lock
+          git add flake.lock && git commit -qm init
+          git push -q origin main
+
+          : > gh_out
+          SKIP_UNMOVED=false FLAKE=. INPUT=nixpkgs BASE=main GITHUB_OUTPUT=$PWD/gh_out bash "$scripts/moved.sh" >/dev/null
+          grep -qx 'moved=true' gh_out
+
+          : > gh_out
+          SKIP_UNMOVED=true FLAKE=. INPUT=nixpkgs BASE=main GITHUB_OUTPUT=$PWD/gh_out bash "$scripts/moved.sh" >/dev/null
+          grep -qx 'moved=false' gh_out
+
+          : > gh_out
+          SKIP_UNMOVED=true FLAKE=. INPUT=sub/nixpkgs BASE=main GITHUB_OUTPUT=$PWD/gh_out bash "$scripts/moved.sh" >/dev/null
+          grep -qx 'moved=false' gh_out
+
+          jq '.nodes.nixpkgs.locked.rev = "2222222222222222222222222222222222222222"' flake.lock > f && mv f flake.lock
+          : > gh_out
+          SKIP_UNMOVED=true FLAKE=. INPUT=sub/nixpkgs BASE=main GITHUB_OUTPUT=$PWD/gh_out bash "$scripts/moved.sh" >/dev/null
+          grep -qx 'moved=true' gh_out
+        )
+
+        # 2. clone-holds.sh: validation and local repository checkout at locked rev
+        mkdir -p holds_remote
+        (
+          cd holds_remote
+          git init -q -b main .
+          echo '{"oldhold":{"from":"stable"}}' > held-packages.json
+          git add held-packages.json && git commit -qm first
+          first_rev=$(git rev-parse HEAD)
+          echo '{"oldhold":{"from":"stable"},"newhold":{"from":"stable"}}' > held-packages.json
+          git add held-packages.json && git commit -qm second
+
+          cd "$TMPDIR/work_repo"
+          jq --arg r "$first_rev" '.nodes.root.inputs["my-holds"] = "myholds" | .nodes.myholds = {locked: {rev: $r}}' flake.lock > f && mv f flake.lock
+
+          if RUNNER_TEMP=$TMPDIR GITHUB_ENV=$TMPDIR/env HOLDS_REPO=$TMPDIR/holds_remote bash "$scripts/clone-holds.sh" 2>/dev/null; then
+            echo "clone-holds without HOLDS_INPUT should fail" >&2
+            exit 1
+          fi
+          if RUNNER_TEMP=$TMPDIR GITHUB_ENV=$TMPDIR/env HOLDS_REPO=$TMPDIR/holds_remote HOLDS_INPUT=missing-input bash "$scripts/clone-holds.sh" 2>/dev/null; then
+            echo "clone-holds with unknown input should fail" >&2
+            exit 1
+          fi
+          : > "$TMPDIR/env"
+          RUNNER_TEMP=$TMPDIR GITHUB_ENV=$TMPDIR/env HOLDS_REPO=$TMPDIR/holds_remote HOLDS_INPUT=my-holds FLAKE=. bash "$scripts/clone-holds.sh"
+          grep -qx "NIX_DETOUR_HOLDS_CLONE=$TMPDIR/holds-repo" "$TMPDIR/env"
+          grep -qx "NIX_DETOUR_OVERRIDE=--override-input my-holds path:$TMPDIR/holds-repo" "$TMPDIR/env"
+          test "$(jq -r 'keys | join(",")' "$TMPDIR/holds-repo/held-packages.json")" = "oldhold"
+        )
+
+        # 3. release-check.sh: release vs held with valid and malformed since dates
+        mkdir -p mockbin
+        cat << 'EOF' > mockbin/nix
+        #!${pkgs.runtimeShell}
+        case "$*" in
+          *"builtins.currentSystem"*) printf 'x86_64-linux' ;;
+          *"#releaseChecks.x86_64-linux --override-input"*)
+            echo '{"good":{"since":"2026-01-01"},"stillbroken":{"since":"2026-01-01"},"badsince":{"since":"not-a-date"}}'
+            ;;
+          *'build --no-link'*'"good"'*) exit 0 ;;
+          *'build --no-link'*) exit 1 ;;
+          *) exit 1 ;;
+        esac
+        EOF
+        chmod +x mockbin/nix
+        PATH="$PWD/mockbin:$PATH" "$scripts/release-check.sh" . github:NixOS/nixpkgs/nixos-unstable > rel.out 2> rel.err
+        grep -qx 'release good' rel.out
+        grep -q '^held stillbroken [0-9]\+$' rel.out
+        grep -qx 'held badsince' rel.out
+        grep -q '::warning::badsince:' rel.err
+
+        # 4. update.sh + reach.sh + hold.sh offline verification
+        cat << 'EOF' > mockbin/nix
+        #!${pkgs.runtimeShell}
+        # Delegate nix run (from hold.sh) to nix-detour CLI and mock nix flake prefetch
+        if [ "$1" = "run" ]; then
+          shift 3
+          exec nix-detour "$@"
+        fi
+        if [ "$1" = "flake" ] && [ "$2" = "prefetch" ]; then
+          echo '{"hash":"sha256-111"}'
+          exit 0
+        fi
+        case "$*" in
+          *"builtins.currentSystem"*) printf 'x86_64-linux' ;;
+          *"#nixDetourWatch.x86_64-linux --apply x: \"yes\""*) printf 'yes' ;;
+          *"#nixDetourTargets.x86_64-linux --apply x: \"yes\""*) printf 'yes' ;;
+          *"#nixDetourWatch.x86_64-linux --apply"*)
+            if [ -n "''${MOCK_ROUND2:-}" ]; then
+              # pkgA was fixed by hold; pkgB still fails even when held!
+              echo '{"pkgA":{"drv":"/nix/store/aaaa-pkgA.drv","out":"/nix/store/aaaa-pkgA"},"pkgB":null,"netpkg":{"drv":"/nix/store/nnnn-netpkg.drv","out":"/nix/store/nnnn-netpkg"}}'
+            else
+              echo '{"okpkg":{"drv":"/nix/store/oooo-okpkg.drv","out":"/nix/store/oooo-okpkg"},"pkgA":null,"pkgB":null,"netpkg":{"drv":"/nix/store/nnnn-netpkg.drv","out":"/nix/store/nnnn-netpkg"},"buildfail":{"drv":"/nix/store/bbbb-buildfail.drv","out":"/nix/store/bbbb-buildfail"}}'
+            fi
+            ;;
+          *'#nixDetourWatch.x86_64-linux."pkgA".drvPath'*)
+            echo "error: Package ‘pkgA-1.0’ in /nix/store/xxx/pkg.nix:10 is marked as broken" >&2
+            exit 1
+            ;;
+          *'#nixDetourWatch.x86_64-linux."pkgB".drvPath'*)
+            echo "error: evaluation failed for pkgB" >&2
+            exit 1
+            ;;
+          *"--dry-run"*)
+            echo "these 2 derivations will be built:" >&2
+            echo "  /nix/store/nnnn-netpkg.drv" >&2
+            echo "  /nix/store/bbbb-buildfail.drv" >&2
+            echo "these 0 paths will be fetched:" >&2
+            ;;
+          *"--keep-going"*) exit 1 ;;
+          *"path-info /nix/store/oooo-okpkg"*|*"path-info /nix/store/aaaa-pkgA"*) exit 0 ;;
+          *"path-info"*) exit 1 ;;
+          *"build"*"/nix/store/nnnn-netpkg.drv^*"*)
+            echo "error: unable to download 'https://example.org/src.tar.gz': HTTP error 502" >&2
+            exit 1
+            ;;
+          *"build"*"/nix/store/bbbb-buildfail.drv^*"*)
+            echo "builder for '/nix/store/bbbb-buildfail.drv' failed with exit code 2" >&2
+            exit 1
+            ;;
+          *"#nixDetourTargets.x86_64-linux --apply builtins.attrNames"*)
+            echo '["hostA"]'
+            ;;
+          *'#nixDetourTargets.x86_64-linux."hostA".target.drvPath'*)
+            if [ -n "''${MOCK_REACH:-}" ]; then
+              printf '/nix/store/hhhh-hostA.drv'
+              exit 0
+            fi
+            echo "error:" >&2
+            echo "while evaluating derivation 'system-path'" >&2
+            echo "while evaluating derivation 'tracepkg-2.0'" >&2
+            echo "error: tracepkg failed assertion" >&2
+            exit 1
+            ;;
+          *'#nixDetourTargets.x86_64-linux."hostA".pkgs --apply'*)
+            printf 'tracepkg'
+            ;;
+          *) exit 1 ;;
+        esac
+        EOF
+        cat << 'EOF' > mockbin/nix-store
+        #!${pkgs.runtimeShell}
+        echo "store daemon unavailable in sandbox" >&2
+        exit 1
+        EOF
+        chmod +x mockbin/nix mockbin/nix-store
+
+        PATH="$PWD/mockbin:$PATH" bash "$scripts/update.sh" . > upd.out 2>/dev/null
+        grep -q '^broken pkgA Package .* is marked as broken$' upd.out
+        grep -qx 'broken pkgB evaluation failed for pkgB' upd.out
+        grep -q '^unavailable netpkg error: unable to download .* HTTP error 502$' upd.out
+        grep -qx 'broken buildfail fails to build' upd.out
+        grep -qx 'broken tracepkg tracepkg failed assertion (in hostA)' upd.out
+        grep -qx 'ok x86_64-linux 1' upd.out
+
+        # reach.sh reports unchecked when nix-store -qR cannot query closure
+        echo '{"pkgA":{"from":"stable"}}' > reach-holds.json
+        MOCK_REACH=1 PATH="$PWD/mockbin:$PATH" bash "$scripts/reach.sh" . reach-holds.json > reach.out
+        grep -q '^unchecked hostA closure query failed:' reach.out
+
+        # hold.sh: multi-round hold & rollback of still-broken hold in report mode + commit safety checks
+        (
+          cd work_repo
+          echo '{}' > held-packages.json
+          cat << 'EOF' > round0.txt
+        broken pkgA broken in unstable
+        broken pkgB broken everywhere
+        EOF
+          mkdir -p rtemp
+          : > gh_out
+          : > gh_summary
+          MOCK_ROUND2=1 MOCK_REACH=1 PATH="$TMPDIR/mockbin:$PATH" \
+            FLAKE=. HOLDS=held-packages.json INPUT=nixpkgs BASE=main MODE=report BRANCH=main BUILD=false \
+            RUNNER_TEMP=$PWD/rtemp GITHUB_OUTPUT=$PWD/gh_out GITHUB_STEP_SUMMARY=$PWD/gh_summary \
+            bash "$scripts/hold.sh" round0.txt
+          grep -qx 'held=pkgA' gh_out
+          grep -qx 'failed=pkgB' gh_out
+          test "$(cat held-packages.json)" = '{}'
+
+          # Commit mode rejects mismatched EXPECTED_HEAD and pull_request events without EXPECTED_HEAD
+          if PATH="$TMPDIR/mockbin:$PATH" FLAKE=. HOLDS=held-packages.json INPUT=nixpkgs BASE=main MODE=commit BRANCH=main BUILD=false \
+            EXPECTED_HEAD=deadbeef RUNNER_TEMP=$PWD/rtemp GITHUB_OUTPUT=$PWD/gh_out GITHUB_STEP_SUMMARY=$PWD/gh_summary \
+            bash "$scripts/hold.sh" round0.txt 2>/dev/null; then
+            echo "hold.sh commit mode with wrong EXPECTED_HEAD should fail" >&2
+            exit 1
+          fi
+          if PATH="$TMPDIR/mockbin:$PATH" FLAKE=. HOLDS=held-packages.json INPUT=nixpkgs BASE=main MODE=commit BRANCH=main BUILD=false \
+            GITHUB_EVENT_NAME=pull_request RUNNER_TEMP=$PWD/rtemp GITHUB_OUTPUT=$PWD/gh_out GITHUB_STEP_SUMMARY=$PWD/gh_summary \
+            bash "$scripts/hold.sh" round0.txt 2>/dev/null; then
+            echo "hold.sh commit mode on pull_request without EXPECTED_HEAD should fail" >&2
+            exit 1
+          fi
+        )
+
+        touch $out
+      '';
+
   # The dashboard server: adds holds through the CLI, refuses other sites.
   web-server =
     pkgs.runCommand "nix-detour-web-server-tests"
@@ -784,6 +1208,20 @@ in
         json=(-H 'Content-Type: application/json')
         hold='{"name":"foo","kind":"hold","entry":{"from":"stable","reason":"r"}}'
 
+        # HEAD, Cache-Control, pr-statuses, invalid pr/upstream/channel queries, unknown POST, invalid JSON, Content-Length
+        curl -sI $url/api/data | grep -qi '^Cache-Control: no-cache'
+        test "$(curl -s -o /dev/null -w '%{http_code}' -I $url/api/data)" = 200
+        test "$(curl -sf $url/api/pr-statuses)" = '{}'
+        test "$(curl -s -o /dev/null -w '%{http_code}' "$url/api/pr-status?pr=notanumber")" = 400
+        test "$(curl -s -o /dev/null -w '%{http_code}' "$url/api/pr-status?pr=1&upstream=../../user")" = 400
+        test "$(curl -s -o /dev/null -w '%{http_code}' "$url/api/pr-status?pr=1&channel=../evil")" = 400
+        test "$(post /api/unknown "''${json[@]}" -d '{}')" = 404
+        test "$(post /api/detour "''${json[@]}" -d '{broken')" = 400
+        test "$(post /api/detour "''${json[@]}" -H 'Content-Length: bogus' -d '{}')" = 400
+        test "$(post /api/detour "''${json[@]}" -H 'Content-Length: 2000000' -d '{}')" = 413
+        test "$(post /api/detour "''${json[@]}" -d '{"name":"--evil","kind":"hold","entry":{"from":"stable","reason":"r"}}')" = 400
+        test "$(post /api/detour "''${json[@]}" -d '{"name":"foo","kind":"hold","entry":{"from":"stable","reason":"r","untilVersion":">= 2.0"}}')" = 400
+
         test "$(post /api/detour "''${json[@]}" -H "Origin: $url" -d "$hold")" = 200
         test "$(jq -c '.foo | [.from, .reason]' held-packages.json)" = '["stable","r"]'
         # The CLI checks the fix; its error comes back.
@@ -804,8 +1242,12 @@ in
         test "$(curl -s -o /dev/null -w '%{http_code}' -H 'Host: evil.example' $url/api/data)" = 403
         test "$(jq -r 'has("foo")' held-packages.json)" = true
 
+        # Releasing missing entry fails with 400; releasing foo succeeds; corrupt JSON surfaces in /api/data.errors
+        test "$(post /api/release "''${json[@]}" -d '{"name":"missing","kind":"hold"}')" = 400
         test "$(post /api/release "''${json[@]}" -d '{"name":"foo","kind":"hold"}')" = 200
         test "$(jq -r 'has("foo")' held-packages.json)" = false
+        echo '{corrupt' > held-packages.json
+        curl -sf $url/api/data | jq -e '.errors.holds != null' >/dev/null
         touch $out
       '';
 
