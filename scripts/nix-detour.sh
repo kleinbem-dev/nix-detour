@@ -5,7 +5,7 @@ set -euo pipefail
 
 here=$(dirname "$(realpath "$0")")
 version="@version@"
-[[ $version == @*@ ]] && version="0.3.1"
+[[ $version == @*@ ]] && version="0.4.0"
 release_check="@releaseCheck@"
 [[ $release_check == @*@ ]] && release_check="$here/release-check.sh"
 prs_cli="@prs@"

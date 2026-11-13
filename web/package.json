@@ -1,7 +1,7 @@
 {
   "name": "nix-detour-web",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.4.0",
   "type": "module",
   "scripts": {
     "dev": "vite dev",
@@ -22,6 +22,6 @@
     "vite": "^8.3.5"
   },
   "dependencies": {
-    "@kleinbem/web-config": "git+https://github.com/kleinbem/web-config.git#main"
+    "@kleinbem/web-config": "github:kleinbem/web-config#main"
   }
 }

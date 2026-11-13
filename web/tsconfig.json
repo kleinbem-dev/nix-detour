@@ -1,7 +1,9 @@
 {
-  "extends": "$app/tsconfig",
+  "extends": [
+    "$app/tsconfig",
+    "@kleinbem/web-config/tsconfig/svelte"
+  ],
   "compilerOptions": {
-    "strict": true,
     "allowImportingTsExtensions": true,
     "noEmit": true,
     "rootDirs": [

@@ -1,6 +1,14 @@
 # Changelog
 
-## Unreleased
+## 0.4.0 (2026-11-13)
+
+- Standalone `package.nix` (`pkgs.callPackage ./package.nix { }`) bundles the
+  CLI, release/PR helpers, overlay expressions and built web dashboard into
+  one derivation with offline `fetchNpmDeps` and `nix-detour --version`.
+
+- `nix-detour check` keeps each PR entry's `untilChannel` unless `--channel`
+  is passed; `pr add`, `pr pin` and `pr remove` take a file lock so concurrent
+  runs don't overwrite each other's entries.
 
 - `pr add`: shorthand syntax accepts PR number or GitHub pull request URL
   directly (`pr add 587609` or `pr add <url>`), auto-detecting fork repository,
@@ -73,11 +81,13 @@
   nixos-unstable. CLI: `nix-detour fix add NAME --patch … | --override …`
   (and `--patch`, `--override`, `--from current` on `hold add`).
 
-- Web dashboard: holds, fixes and PRs are added through the CLI, so a
-  nixpkgs revision, patch URLs and the PR's head commit are pinned by hash
-  (they were saved without one, and evaluation failed). The server refuses requests from other sites, and
-  the dashboard says when saving or releasing fails. Imported data stays in
-  the page instead of writing to the local files.
+- Web dashboard: holds, fixes, PRs (including shorthand auto-detection and
+  `pythonPackages`) and releases go through the CLI, so revisions, patch URLs
+  and PR head commits are pinned by hash. Supports light and dark themes, font
+  scaling, native `<dialog>` modals, TTL-cached PR status checks, and true
+  empty local files without loading sample data over them. The server refuses
+  cross-site requests, and imported data stays in the page instead of writing
+  to disk.
 
 ## 0.3.1 (2026-11-01)
 
