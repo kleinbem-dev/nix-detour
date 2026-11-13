@@ -145,11 +145,13 @@
   });
 
   async function refreshPrStatuses(prs: Record<string, PrEntry>) {
+    let freshCached: Record<string, PrStatusInfo> = {};
     try {
       const cachedRes = await fetch('/api/pr-statuses');
       if (cachedRes.ok) {
         const cached = (await cachedRes.json()) as Record<string, PrStatusInfo>;
         if (cached && typeof cached === 'object') {
+          freshCached = cached;
           prStatuses = { ...prStatuses, ...cached };
         }
       }
@@ -160,7 +162,7 @@
       const upstream = p.upstream || 'NixOS/nixpkgs';
       const channel = p.untilChannel || 'nixos-unstable';
       const key = prStatusKey(p.pr, upstream, channel);
-      if (prStatuses[key] || inFlightPrKeys.has(key)) continue;
+      if (freshCached[key] || inFlightPrKeys.has(key)) continue;
       inFlightPrKeys.add(key);
       const qs = new URLSearchParams({ pr: String(p.pr), upstream, channel });
       fetch(`/api/pr-status?${qs.toString()}`)
@@ -322,6 +324,7 @@
     loadErrors = {};
     sourceName = source;
     isLocalApi = false;
+    void refreshPrStatuses(newPrs);
   }
 
   function handleResetDefault() {
@@ -330,6 +333,7 @@
     loadErrors = {};
     sourceName = 'kleinbem/nix-detour-fleet (sample)';
     isLocalApi = false;
+    void refreshPrStatuses(initialPrs);
   }
 
   function handleWindowKeydown(e: KeyboardEvent) {

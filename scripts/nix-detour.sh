@@ -96,7 +96,7 @@ EOF
 esac
 
 file=held-packages.json prs_file=nixpkgs-prs.json lock=flake.lock input=nixpkgs
-file_explicit=false lock_explicit=false flake_explicit=false
+file_explicit=false lock_explicit=false flake_explicit=false channel_explicit=false
 from=previous reason="" link="" release_when="" until_version="" tests=""
 flake=. channel=github:NixOS/nixpkgs/nixos-unstable override=""
 args=() patches=()
@@ -120,7 +120,7 @@ while (($#)); do
     --patch) need "$@"; patches+=("$2"); shift 2 ;;
     --override) need "$@"; override="$2"; shift 2 ;;
     --flake) need "$@"; flake="$2"; flake_explicit=true; shift 2 ;;
-    --channel) need "$@"; channel="$2"; shift 2 ;;
+    --channel) need "$@"; channel="$2"; channel_explicit=true; shift 2 ;;
     -h | --help) usage; exit 0 ;;
     --) shift; args+=("$@"); break ;;
     -*) die "unknown option $1 (see --help)" ;;
@@ -224,7 +224,9 @@ if $all_check; then
   if [[ -f $prs_file ]]; then
     $ran && echo ""
     echo "=== PRs ==="
-    "$prs_cli" check --file "$prs_file" --channel "$channel" || failed=true
+    pr_check_args=(check --file "$prs_file")
+    $channel_explicit && pr_check_args+=(--channel "$channel")
+    "$prs_cli" "${pr_check_args[@]}" || failed=true
     ran=true
   fi
   $ran || die "neither $file nor $prs_file found"
@@ -260,21 +262,20 @@ if $all_release; then
   [[ -n ${args[1]:-} ]] && resolve_target "${args[1]}"
   [[ -n $name ]] || die "release needs package name"
   valid_name "$name"
-  found=false
-  if [[ -f $file ]]; then
-    holds_data=$(holds)
-    if jq -e --arg n "$name" 'has($n)' <<<"$holds_data" >/dev/null; then
-      jq --arg n "$name" 'del(.[$n])' <<<"$holds_data" | write_holds
-      echo "released hold $name"
-      found=true
-    fi
-  fi
+  holds_data='{}'
+  [[ -f $file ]] && holds_data=$(holds)
   if [[ -f $prs_file ]]; then
     jq -e 'type == "object"' "$prs_file" >/dev/null 2>&1 || die "$prs_file is not a valid JSON object"
-    if jq -e --arg n "$name" 'has($n)' "$prs_file" >/dev/null; then
-      "$prs_cli" remove --file "$prs_file" -- "$name"
-      found=true
-    fi
+  fi
+  found=false
+  if [[ -f $file ]] && jq -e --arg n "$name" 'has($n)' <<<"$holds_data" >/dev/null; then
+    jq --arg n "$name" 'del(.[$n])' <<<"$holds_data" | write_holds
+    echo "released hold $name"
+    found=true
+  fi
+  if [[ -f $prs_file ]] && jq -e --arg n "$name" 'has($n)' "$prs_file" >/dev/null; then
+    "$prs_cli" remove --file "$prs_file" -- "$name"
+    found=true
   fi
   $found || die "no hold or PR entry '$name' found"
   exit 0

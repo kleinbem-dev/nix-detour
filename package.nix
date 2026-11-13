@@ -1,7 +1,6 @@
 {
   lib,
   stdenvNoCC,
-  fetchFromGitHub,
   fetchNpmDeps,
   nodejs,
   npmHooks,
@@ -21,11 +20,15 @@ stdenvNoCC.mkDerivation (finalAttrs: {
   pname = "nix-detour";
   version = "0.3.1";
 
-  src = fetchFromGitHub {
-    owner = "kleinbem-dev";
-    repo = "nix-detour";
-    tag = "v${finalAttrs.version}";
-    hash = "sha256-7FFoflLay4XzjlJWOvnzlJ+KBo8/HydPQtX5xwfWT2I=";
+  src = lib.fileset.toSource {
+    root = ./.;
+    fileset = lib.fileset.unions [
+      ./overlay.nix
+      ./prs.nix
+      ./watch.nix
+      ./scripts
+      ./web
+    ];
   };
 
   npmDeps = fetchNpmDeps {

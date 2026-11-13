@@ -91,17 +91,7 @@
       packages = forAllSystems (
         pkgs:
         let
-          nix-detour = (pkgs.callPackage ./package.nix { }).overrideAttrs (
-            finalAttrs: prevAttrs: {
-              src = self;
-              npmDeps = pkgs.fetchNpmDeps {
-                inherit (finalAttrs) pname version;
-                src = "${self}/web";
-                fetcherVersion = 2;
-                hash = prevAttrs.npmDeps.outputHash;
-              };
-            }
-          );
+          nix-detour = pkgs.callPackage ./package.nix { };
         in
         {
           default = nix-detour;

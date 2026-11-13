@@ -938,6 +938,29 @@ in
                 PATH=".:$PATH" nix-detour pr check bare-prs-file > bare_file_check.txt
                 grep -q '^prsfile[[:space:]]\+#999' bare_file_check.txt
 
+                # Combined check preserves per-entry untilChannel unless --channel is explicit
+                mkdir -p chan_dir
+                echo '{"waiting": {"pr": 102, "owner": "o", "repo": "r", "attrs": ["w"], "untilChannel": "nixos-25.05"}}' > chan_dir/nixpkgs-prs.json
+                PATH=".:$PATH" nix-detour check chan_dir > chan_check.txt
+                grep -q 'waiting for nixos-25.05' chan_check.txt
+
+                # pr check rejects entries with invalid PR numbers
+                echo '{"badpr": {"pr": "bad", "owner": "o", "repo": "r", "attrs": ["b"]}}' > bad-prs.json
+                if PATH=".:$PATH" nix-detour pr check --json --file bad-prs.json 2>/dev/null; then
+                  echo "pr check should fail on non-numeric pr" >&2
+                  exit 1
+                fi
+
+                # release validates both files before mutating either
+                mkdir -p atomic_rel
+                echo '{"keepme": {"from": "stable", "reason": "r"}}' > atomic_rel/held-packages.json
+                echo '{corrupt' > atomic_rel/nixpkgs-prs.json
+                if nix-detour release keepme atomic_rel 2>/dev/null; then
+                  echo "release should fail when sibling PR file is corrupt" >&2
+                  exit 1
+                fi
+                test "$(jq -r 'has("keepme")' atomic_rel/held-packages.json)" = true
+
                 nix-detour web --help > web_help.txt
                 grep -q 'nix-detour web' web_help.txt
                 touch $out
@@ -1215,6 +1238,8 @@ in
         test "$(curl -s -o /dev/null -w '%{http_code}' "$url/api/pr-status?pr=notanumber")" = 400
         test "$(curl -s -o /dev/null -w '%{http_code}' "$url/api/pr-status?pr=1&upstream=../../user")" = 400
         test "$(curl -s -o /dev/null -w '%{http_code}' "$url/api/pr-status?pr=1&channel=../evil")" = 400
+        test "$(curl -s -o /dev/null -w '%{http_code}' "$url/api/pr-status?pr=1&channel=github:../../evil/main")" = 400
+        test "$(curl -s -o /dev/null -w '%{http_code}' "$url/api/pr-status?pr=1&channel=github:NixOS/nixpkgs/nixos-unstable")" = 200
         test "$(post /api/unknown "''${json[@]}" -d '{}')" = 404
         test "$(post /api/detour "''${json[@]}" -d '{broken')" = 400
         test "$(post /api/detour "''${json[@]}" -H 'Content-Length: bogus' -d '{}')" = 400

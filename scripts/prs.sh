@@ -172,11 +172,24 @@ entries() {
   fi
 }
 
-write_entries() {
-  local new
-  new=$(jq --indent 2 'to_entries | sort_by(.key) | from_entries') && [[ -n $new ]] \
-    || die "cannot update $file (is it valid JSON?)"
-  printf '%s\n' "$new" >"$file"
+# Acquires a cross-process directory lock, reloads current entries, applies the jq
+# filter, and atomically replaces $file so concurrent mutations are preserved.
+update_entries() {
+  local lockdir="${file}.lock" waited=0 cur new tmp
+  mkdir -p "$(dirname "$file")"
+  while ! mkdir "$lockdir" 2>/dev/null; do
+    ((++waited <= 200)) || die "timed out waiting for lock $lockdir"
+    sleep 0.05
+  done
+  trap 'rmdir "$lockdir" 2>/dev/null || true' EXIT
+  cur=$(entries)
+  new=$(jq "$@" <<<"$cur" | jq --indent 2 'to_entries | sort_by(.key) | from_entries') && [[ -n $new ]] \
+    || { rmdir "$lockdir" 2>/dev/null || true; trap - EXIT; die "cannot update $file"; }
+  tmp=$(mktemp "${file}.XXXXXX")
+  printf '%s\n' "$new" >"$tmp"
+  mv "$tmp" "$file"
+  rmdir "$lockdir" 2>/dev/null || true
+  trap - EXIT
 }
 
 need_entry() {
@@ -310,17 +323,20 @@ case "$command" in
     hash=""
     [[ -z $rev ]] || hash=$(nar_hash "$repo")
 
-    jq --arg n "$name" --argjson pr "$pr" --arg owner "${repo%%/*}" --arg repo "${repo#*/}" \
+    new_entry=$(jq -n --argjson pr "$pr" --arg owner "${repo%%/*}" --arg repo "${repo#*/}" \
       --arg rev "$rev" --arg h "$hash" --arg upstream "$upstream" --arg untilCh "$until_ch" \
       --arg attrs "$attrs" --arg scope "$scope" --argjson modules "$modules_json" --argjson paths "$paths_json" \
       --argjson python "$python_json" '
-      .[$n] = ({pr: $pr, owner: $owner, repo: $repo, rev: $rev, narHash: $h, attrs: (if $attrs == "" then [] else ($attrs | split(",")) end)}
+      ({pr: $pr, owner: $owner, repo: $repo, rev: $rev, narHash: $h, attrs: (if $attrs == "" then [] else ($attrs | split(",")) end)}
         + (if $upstream != "NixOS/nixpkgs" then {upstream: $upstream} else {} end)
         + (if $untilCh != "" then {untilChannel: $untilCh} else {} end)
         + (if $scope == "" then {} else {scope: ($scope | split(","))} end)
         + (if $paths == {} then {} else {paths: $paths} end)
         + (if $modules == {} then {} else {modules: $modules} end)
-        + (if $python == [] then {} else {pythonPackages: $python} end))' <<<"$entries_data" | write_entries
+        + (if $python == [] then {} else {pythonPackages: $python} end))')
+    # shellcheck disable=SC2016  # jq program
+    update_entries --arg f "$file" --arg n "$name" --argjson entry "$new_entry" \
+      'if has($n) then ($f + " already has an entry " + $n + " (remove it first)\n" | halt_error(1)) else .[$n] = $entry end'
     if [[ -n $rev ]]; then
       echo "added $name, pinned to $rev ($hash)"
     else
@@ -346,9 +362,13 @@ case "$command" in
         else
           rev="$latest_sha"
           hash=$(nar_hash "$owner_repo")
-          entries_data=$(jq --arg n "$k" --arg rev "$rev" --arg h "$hash" '.[$n].rev = $rev | .[$n].narHash = $h' <<<"$entries_data")
-          printf '%s' "$entries_data" | write_entries
-          echo "$k updated to ${rev:0:12} ($hash)"
+          # Reload and merge under lock so concurrent removals/additions are preserved.
+          # shellcheck disable=SC2016  # jq program
+          update_entries --arg n "$k" --arg rev "$rev" --arg h "$hash" \
+            'if has($n) then .[$n].rev = $rev | .[$n].narHash = $h else . end'
+          if entries | jq -e --arg n "$k" 'has($n)' >/dev/null; then
+            echo "$k updated to ${rev:0:12} ($hash)"
+          fi
         fi
       done
       exit 0
@@ -369,13 +389,17 @@ case "$command" in
       rev="$latest_sha"
     fi
     hash=$(nar_hash "$owner_repo")
-    jq --arg n "$name" --arg rev "$rev" --arg h "$hash" '.[$n].rev = $rev | .[$n].narHash = $h' <<<"$entries_data" | write_entries
+    # shellcheck disable=SC2016  # jq program
+    update_entries --arg f "$file" --arg n "$name" --arg rev "$rev" --arg h "$hash" \
+      'if has($n) then .[$n].rev = $rev | .[$n].narHash = $h else ($f + " has no entry " + $n + "\n" | halt_error(1)) end'
     echo "$name pinned to $rev ($hash)"
     ;;
   remove)
     need_entry
     valid_name "$name"
-    entries | jq --arg n "$name" 'del(.[$n])' | write_entries
+    # shellcheck disable=SC2016  # jq program
+    update_entries --arg f "$file" --arg n "$name" \
+      'if has($n) then del(.[$n]) else ($f + " has no entry " + $n + "\n" | halt_error(1)) end'
     echo "removed $name"
     ;;
   list)
@@ -432,7 +456,9 @@ case "$command" in
         IFS=$'\x1f' read -r pr_num entry_upstream entry_channel < <(
           jq -r --arg n "$n" '.[$n] | [(.pr // "" | tostring), (.upstream // ""), (.untilChannel // "")] | join("\u001f")' <<<"$entries_data"
         )
-        [[ -n $pr_num ]] || exit 0
+        if [[ ! $pr_num =~ ^[0-9]+$ ]] || ((pr_num <= 0)); then
+          exit 1
+        fi
         target_upstream="${entry_upstream:-$upstream}"
         channel_branch="$default_branch"
         ! $channel_explicit && [[ -n $entry_channel ]] && channel_branch=$(strip_channel "$entry_channel")
@@ -469,7 +495,8 @@ case "$command" in
           --argjson draft "$draft" --argjson merged "$merged" --argjson inChannel "$in_channel" \
           --arg details "$details" --arg title "$title" --arg url "$html_url" --arg ch "$channel_branch" \
           '{($n): {pr: $pr, status: $status, state: $state, draft: $draft, merged: $merged, inChannel: $inChannel, details: $details, title: $title, url: $url, channel: $ch}}' \
-          >"$tmpdir/$idx.json"
+          >"$tmpdir/$idx.json.tmp"
+        mv "$tmpdir/$idx.json.tmp" "$tmpdir/$idx.json"
       ) &
       ((++running))
       if ((running >= 6)); then
@@ -481,7 +508,9 @@ case "$command" in
     files_out=()
     for idx in "${!target_names[@]}"; do
       n="${target_names[$idx]}"
-      [[ -f "$tmpdir/$idx.json" ]] || die "check failed for entry '$n'"
+      if [[ ! -s "$tmpdir/$idx.json" ]] || ! jq -e --arg n "$n" 'has($n)' "$tmpdir/$idx.json" >/dev/null 2>&1; then
+        die "check failed for entry '$n'"
+      fi
       files_out+=("$tmpdir/$idx.json")
       if ! $as_json; then
         IFS=$'\x1f' read -r pr_num status details < <(

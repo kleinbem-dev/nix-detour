@@ -138,7 +138,7 @@
             </div>
             {#if item.attrs && item.attrs.length > 0}
               <div class="flex items-center gap-1 mt-1 overflow-hidden">
-                {#each item.attrs.slice(0, 2) as attr (attr)}
+                {#each item.attrs.slice(0, 2) as attr, idx (idx)}
                   <button
                     type="button"
                     onclick={() => onTagClick?.(attr)}

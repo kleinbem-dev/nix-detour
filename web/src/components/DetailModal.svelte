@@ -161,7 +161,7 @@
         <div>
           <div class="text-xs uppercase tracking-wider text-muted font-medium mb-1">Exported Attributes</div>
           <div class="flex flex-wrap gap-1.5 font-mono text-xs">
-            {#each item.attrs as attr (attr)}
+            {#each item.attrs as attr, idx (idx)}
               <span class="badge badge-success !py-0.5">{attr}</span>
             {/each}
           </div>
@@ -172,7 +172,7 @@
         <div>
           <div class="text-xs uppercase tracking-wider text-muted font-medium mb-1">Python Packages</div>
           <div class="flex flex-wrap gap-1.5 font-mono text-xs">
-            {#each item.pythonPackages as py (py)}
+            {#each item.pythonPackages as py, idx (idx)}
               <span class="badge badge-info !py-0.5">python3Packages.{py}</span>
             {/each}
           </div>
@@ -183,7 +183,7 @@
         <div>
           <div class="text-xs uppercase tracking-wider text-muted font-medium mb-1">Internal Scope Dependencies</div>
           <div class="flex flex-wrap gap-1.5 font-mono text-xs">
-            {#each item.scope as sc (sc)}
+            {#each item.scope as sc, idx (idx)}
               <span class="badge badge-muted !py-0.5">{sc}</span>
             {/each}
           </div>
@@ -208,7 +208,7 @@
         <div>
           <div class="text-xs uppercase tracking-wider text-muted font-medium mb-1">NixOS VM Tests</div>
           <div class="flex flex-wrap gap-1.5 font-mono text-xs">
-            {#each item.tests as t (t)}
+            {#each item.tests as t, idx (idx)}
               <span class="badge badge-ai !py-0.5">nixosTests.{t}</span>
             {/each}
           </div>

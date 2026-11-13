@@ -32,9 +32,17 @@ parser.add_argument("--cli", type=str, default="", help="Path to nix-detour CLI 
 
 args, _ = parser.parse_known_args()
 
+def _resolve_cli(explicit: str) -> str | None:
+    if not explicit:
+        return shutil.which("nix-detour")
+    if os.path.sep in explicit or explicit.startswith("."):
+        return os.path.abspath(explicit)
+    return shutil.which(explicit) or os.path.abspath(explicit)
+
+
 PORT = int(args.port_pos) if args.port_pos and args.port_pos.isdigit() else args.port
 STATIC_DIR = args.static_dir_pos or args.static_dir or os.path.join(os.path.dirname(__file__), "dist")
-CLI = args.cli or shutil.which("nix-detour")
+CLI = _resolve_cli(args.cli)
 GH_BIN = shutil.which("gh")
 GIT_BIN = shutil.which("git")
 
@@ -51,7 +59,7 @@ def _detect_git_root() -> str | None:
         res = subprocess.run([GIT_BIN, "rev-parse", "--show-toplevel"], capture_output=True, text=True, timeout=2, check=False)
         if res.returncode == 0 and res.stdout.strip():
             return os.path.abspath(res.stdout.strip())
-    except OSError:
+    except (OSError, subprocess.TimeoutExpired):
         pass
     return None
 
@@ -67,8 +75,16 @@ def valid_repo(val: object) -> bool:
     return isinstance(val, str) and bool(RE_REPO.fullmatch(val)) and ".." not in val.split("/")
 
 
-def valid_channel(val: object) -> bool:
-    return isinstance(val, str) and bool(RE_CHANNEL.fullmatch(val)) and ".." not in val
+def normalize_channel(val: object) -> str | None:
+    if not isinstance(val, str) or not val:
+        return None
+    branch = val
+    if val.startswith("github:"):
+        parts = val[7:].split("/", 2)
+        if len(parts) != 3 or not valid_repo(f"{parts[0]}/{parts[1]}"):
+            return None
+        branch = parts[2]
+    return branch if RE_CHANNEL.fullmatch(branch) and ".." not in branch else None
 
 
 def resolve_file(explicit_path: str, filename: str) -> tuple[str, bool]:
@@ -127,10 +143,7 @@ def _cache_put(key: str, ts: float, value: dict) -> None:
 
 
 def fetch_pr_status(pr_number: int, upstream: str = "NixOS/nixpkgs", channel: str = "nixos-unstable") -> dict:
-    if channel.startswith("github:"):
-        parts = channel.split("/", 2)
-        if len(parts) == 3:
-            channel = parts[2]
+    channel = normalize_channel(channel) or "nixos-unstable"
     cache_key = f"{upstream}:{pr_number}:{channel}"
     now = time.time()
     with CACHE_LOCK:
@@ -230,15 +243,18 @@ def pr_add_argv(name: str, entry: dict, target: str) -> list[str]:
     if not valid_repo(upstream):
         raise ValueError("upstream must be OWNER/REPO")
     until_channel = entry.get("untilChannel")
-    if until_channel and not valid_channel(until_channel):
-        raise ValueError("untilChannel is invalid")
+    norm_channel = None
+    if until_channel:
+        norm_channel = normalize_channel(until_channel)
+        if not norm_channel:
+            raise ValueError("untilChannel is invalid")
 
     auto = bool(entry.get("auto")) or (not entry.get("owner") and not entry.get("repo"))
     argv = [CLI, "pr", "add", "--file", target, "--pr", str(pr)]
     if upstream != "NixOS/nixpkgs":
         argv += ["--upstream", upstream]
-    if until_channel:
-        argv += ["--channel", until_channel]
+    if norm_channel:
+        argv += ["--channel", norm_channel]
 
     if auto:
         if name and not valid_name(name):
@@ -381,16 +397,17 @@ class DetourHandler(http.server.SimpleHTTPRequestHandler):
             qs = urllib.parse.parse_qs(parsed_url.query)
             pr_val = qs.get("pr", [""])[0]
             upstream = qs.get("upstream", ["NixOS/nixpkgs"])[0]
-            channel = qs.get("channel", ["nixos-unstable"])[0]
-            if not pr_val.isdigit() or int(pr_val) <= 0 or not valid_repo(upstream) or not valid_channel(channel):
+            norm_channel = normalize_channel(qs.get("channel", ["nixos-unstable"])[0])
+            if not pr_val.isdigit() or int(pr_val) <= 0 or not valid_repo(upstream) or not norm_channel:
                 self._send_json(400, {"error": "invalid pr, upstream, or channel parameter"}, send_body=send_body)
                 return True
-            self._send_json(200, fetch_pr_status(int(pr_val), upstream, channel), send_body=send_body)
+            self._send_json(200, fetch_pr_status(int(pr_val), upstream, norm_channel), send_body=send_body)
             return True
 
         if parsed_url.path == "/api/pr-statuses":
+            now = time.time()
             with CACHE_LOCK:
-                cached = {k: v[1] for k, v in PR_CACHE.items()}
+                cached = {k: v[1] for k, v in PR_CACHE.items() if now - v[0] < CACHE_TTL}
             self._send_json(200, cached, send_body=send_body)
             return True
         return False
