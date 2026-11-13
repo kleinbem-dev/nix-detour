@@ -15,8 +15,13 @@
 set -euo pipefail
 
 here=$(dirname "$(realpath "$0")")
+(($# >= 1)) || { echo "Usage: scripts/hold.sh RESULTS" >&2; exit 1; }
 results="$1"
-cli=(nix run "path:$here/.." --)
+if command -v nix-detour >/dev/null 2>&1; then
+  cli=(nix-detour)
+else
+  cli=("$here/nix-detour.sh")
+fi
 args=()
 case $BUILD in
   true) ;;
@@ -28,7 +33,12 @@ git fetch -q --depth 1 origin "$BASE" || { echo "cannot fetch $BASE from origin 
 # ./ makes the path relative to this directory, like FLAKE.
 base_lock=$(git show "FETCH_HEAD:./${FLAKE%/}/flake.lock") || { echo "$BASE has no $FLAKE/flake.lock" >&2; exit 1; }
 jq -e . <<<"$base_lock" >/dev/null || { echo "$BASE's flake.lock is not valid JSON" >&2; exit 1; }
-previous=$(jq -er --arg i "$INPUT" '.nodes[.nodes.root.inputs[$i]].locked.rev' <<<"$base_lock") \
+# shellcheck disable=SC2016  # jq program
+previous=$(jq -er --arg i "$INPUT" '
+  . as $lock | def nodeof($segs): reduce $segs[] as $s ($lock.root // "root";
+    if . == null then null else ($lock.nodes[.].inputs[$s] // null)
+    | if type == "array" then nodeof(.) else . end end);
+  $lock.nodes[nodeof($i | split("/"))].locked.rev // empty' <<<"$base_lock") \
   || { echo "no input $INPUT in $BASE's flake.lock" >&2; exit 1; }
 
 all="$RUNNER_TEMP/all.txt"
@@ -88,7 +98,7 @@ for n in 1 2 3 4 5 6; do
       # Held in this run and still failing.
       failed+=("$name")
       mapfile -t held < <(printf '%s\n' "${held[@]}" | grep -vxF -- "$name" || true)
-      "${cli[@]}" hold remove "$name" --file "$HOLDS"
+      "${cli[@]}" hold remove --file "$HOLDS" -- "$name"
     elif $checked && jq -e --arg n "$name" 'has($n)' "$RUNNER_TEMP/holds.before" >/dev/null; then
       failed+=("$name")
     else
@@ -105,8 +115,8 @@ for n in 1 2 3 4 5 6; do
     break
   fi
   for name in "${new[@]}"; do
-    "${cli[@]}" hold add "$name" --file "$HOLDS" --from "$previous" \
-      --reason "Broken by the lock update: $(reason "$name")"
+    "${cli[@]}" hold add --file "$HOLDS" --from "$previous" \
+      --reason "Broken by the lock update: $(reason "$name")" -- "$name"
     held+=("$name")
   done
   round="$RUNNER_TEMP/round$n.txt"

@@ -2,6 +2,8 @@
   "extends": "$app/tsconfig",
   "compilerOptions": {
     "strict": true,
+    "allowImportingTsExtensions": true,
+    "noEmit": true,
     "rootDirs": [
       ".",
       "./.svelte-kit/types"

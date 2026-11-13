@@ -8,7 +8,7 @@ Usage: nix-detour pr <command> [options]
 
   add [NAME] [NUMBER|URL] [--pr NUMBER] [--repo OWNER/REPO] [--attrs a,b]
            [--rev SHA] [--pin] [--no-pin] [--scope c,d] [--path ATTR=PATH]...
-           [--module NAME=PATH]... [--python NAME]... [--auto]
+           [--module NAME=PATH]... [--python NAME]... [--channel REF] [--auto]
       Add the packages `attrs` of nixpkgs PR NUMBER (or full PR URL).
       When passed as a PR number or URL (or with --auto), repo, latest commit
       SHA, package attributes and modules are auto-detected from GitHub.
@@ -28,7 +28,7 @@ Usage: nix-detour pr <command> [options]
   merged [--flake REF]
       Say which entries nixpkgs has in the same or a newer version: they
       can go.
-  check [NAME|PATH] [--channel REF] [--upstream OWNER/REPO] [--json]
+  check [NAME...|PATH] [--channel REF] [--upstream OWNER/REPO] [--json]
       Check upstream GitHub PR status (draft, open, merged) and whether
       merged PRs have reached the upstream channel (default: nixos-unstable).
 
@@ -37,24 +37,25 @@ Options for every command:
 EOF
 }
 
-die() {
-  echo "nix-detour pr: $*" >&2
-  exit 1
+die() { echo "nix-detour pr: $*" >&2; exit 1; }
+valid_name() { [[ $1 =~ ^[A-Za-z0-9_][A-Za-z0-9_+.-]*$ ]] || die "invalid entry name '$1'"; }
+valid_repo() { [[ $1 =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ && $1 != *..* ]] || die "invalid repository '$1' (expected OWNER/REPO)"; }
+need() { (($# >= 2)) || die "$1 needs a value"; }
+
+to_flake() {
+  if [[ $1 != /* && $1 != ./* && $1 != ../* && $1 != *:* ]]; then echo "./$1"; else echo "$1"; fi
 }
 
 file=nixpkgs-prs.json file_explicit=false flake=. pr="" repo="" attrs="" rev="" scope=""
-channel=nixos-unstable upstream=NixOS/nixpkgs as_json=false
+channel=nixos-unstable channel_explicit=false upstream=NixOS/nixpkgs as_json=false
 all_entries=false no_pin=false pin_explicit=false auto_flag=false
-modules=() paths=() python_pkgs=()
-args=()
-need() {
-  (($# >= 2)) || die "$1 needs a value"
-}
+modules=() paths=() python_pkgs=() args=()
+
 while (($#)); do
   case "$1" in
     --file) need "$@"; file="$2"; file_explicit=true; shift 2 ;;
     --flake) need "$@"; flake="$2"; shift 2 ;;
-    --channel) need "$@"; channel="$2"; shift 2 ;;
+    --channel | --until-channel) need "$@"; channel="$2"; channel_explicit=true; shift 2 ;;
     --upstream) need "$@"; upstream="$2"; shift 2 ;;
     --json) as_json=true; shift ;;
     --pr) need "$@"; pr="$2"; shift 2 ;;
@@ -70,6 +71,7 @@ while (($#)); do
     --python) need "$@"; python_pkgs+=("$2"); shift 2 ;;
     --all | -a) all_entries=true; shift ;;
     -h | --help) usage; exit 0 ;;
+    --) shift; args+=("$@"); break ;;
     -*) die "unknown option $1 (see --help)" ;;
     *) args+=("$1"); shift ;;
   esac
@@ -78,39 +80,32 @@ done
 command="${args[0]}"
 name="${args[1]:-}"
 
+valid_repo "$upstream"
+has_gh=false
+command -v gh >/dev/null 2>&1 && has_gh=true
+
 gh_api() {
-  local endpoint="$1"
-  local res=""
-  if command -v gh >/dev/null 2>&1; then
-    res=$(gh api "$endpoint" 2>/dev/null || true)
-  fi
-  if [[ -z "$res" || "$res" == "null" ]]; then
+  local endpoint="$1" res=""
+  $has_gh && res=$(gh api "$endpoint" 2>/dev/null || true)
+  if [[ -z $res || $res == "null" ]]; then
     local auth_hdr=()
-    if [[ -n "${GITHUB_TOKEN:-}" ]]; then
-      auth_hdr=(-H "Authorization: Bearer $GITHUB_TOKEN")
-    fi
-    res=$(curl -s -f "${auth_hdr[@]}" -H "Accept: application/vnd.github+json" -H "User-Agent: nix-detour" "https://api.github.com/$endpoint" 2>/dev/null || true)
+    [[ -n ${GITHUB_TOKEN:-} ]] && auth_hdr=(-H "Authorization: Bearer $GITHUB_TOKEN")
+    res=$(curl -sf "${auth_hdr[@]}" -H "Accept: application/vnd.github+json" -H "User-Agent: nix-detour" "https://api.github.com/$endpoint" 2>/dev/null || true)
   fi
   printf '%s' "$res"
 }
 
 gh_api_files() {
-  local endpoint="$1"
-  local res=""
-  if command -v gh >/dev/null 2>&1; then
-    res=$(gh api "$endpoint" 2>/dev/null || true)
-  fi
-  if [[ -z "$res" || "$res" == "null" ]]; then
-    local page=1 all="[]"
-    while :; do
-      local p_res
-      local delim="?"
-      [[ "$endpoint" == *\?* ]] && delim="&"
+  local endpoint="$1" res=""
+  $has_gh && res=$(gh api "$endpoint" 2>/dev/null || true)
+  if [[ -z $res || $res == "null" ]]; then
+    local page=1 all="[]" delim="?" p_res
+    [[ $endpoint == *\?* ]] && delim="&"
+    while ((page <= 5)); do
       p_res=$(gh_api "${endpoint}${delim}page=$page&per_page=100")
-      [[ -n "$p_res" && "$p_res" != "null" && "$p_res" != "[]" ]] || break
-      all=$(jq -s 'add' <<<"$all $p_res" 2>/dev/null || true)
+      [[ -n $p_res && $p_res != "null" && $p_res != "[]" ]] || break
+      all=$(jq -s 'add' <<<"$all $p_res" 2>/dev/null || echo "$all")
       ((page++))
-      ((page > 5)) && break
     done
     res="$all"
   fi
@@ -118,290 +113,262 @@ gh_api_files() {
 }
 
 parse_pr_ref() {
-  local ref="$1"
-  if [[ "$ref" =~ ^https?://github\.com/([^/]+)/([^/]+)/pull/([0-9]+) ]]; then
+  if [[ $1 =~ ^https?://github\.com/([^/]+)/([^/]+)/pull/([0-9]+) ]]; then
     upstream="${BASH_REMATCH[1]}/${BASH_REMATCH[2]}"
     pr="${BASH_REMATCH[3]}"
+    valid_repo "$upstream"
     return 0
-  elif [[ "$ref" =~ ^[0-9]+$ ]]; then
-    pr="$ref"
+  elif [[ $1 =~ ^[0-9]+$ ]]; then
+    pr="$1"
     return 0
   fi
   return 1
 }
 
-if [[ -n "$pr" ]]; then
-  parse_pr_ref "$pr" || true
-fi
+# Extracts `<pkg>` from Nixpkgs-style PR titles (`[Backport] pkg: init at 1.0`).
+extract_title_pkg() {
+  jq -rn --arg t "$1" '$t | capture("^\\s*(?:\\[[^\\]]+\\]\\s*)?(?<pkg>[^:,\\s]+):") | .pkg // empty' 2>/dev/null || true
+}
+
+[[ -n $pr ]] && { parse_pr_ref "$pr" || true; }
 
 pr_positional=false
-if [[ "$command" == "add" ]]; then
-  if [[ -n "$name" && -z "$pr" ]]; then
-    if parse_pr_ref "$name"; then
-      name=""
-      pr_positional=true
-    elif [[ -n "${args[2]:-}" ]] && parse_pr_ref "${args[2]}"; then
-      pr_positional=true
-    fi
-  elif [[ -n "${args[2]:-}" && -z "$pr" ]] && parse_pr_ref "${args[2]}"; then
+if [[ $command == "add" ]]; then
+  if [[ -n $name && -z $pr ]] && parse_pr_ref "$name"; then
+    name=""
+    pr_positional=true
+  elif [[ -n ${args[2]:-} && -z $pr ]] && parse_pr_ref "${args[2]}"; then
     pr_positional=true
   fi
 fi
 
-if $file_explicit && [[ "$command" == "list" ]] && [[ -n "$name" ]]; then
+resolve_pr_file() {
+  if [[ -d $1 ]]; then file="$1/nixpkgs-prs.json"; else file="$1"; fi
+  name=""
+}
+
+if $file_explicit && [[ $command == "list" && -n $name ]]; then
   die "cannot combine --file with a positional target"
-elif ! $file_explicit && [[ -n "$name" ]]; then
-  if [[ "$command" == "list" ]]; then
-    if [[ -d "$name" ]]; then
-      file="$name/nixpkgs-prs.json"
-      name=""
-    elif [[ -f "$name" ]]; then
-      file="$name"
-      name=""
+elif ! $file_explicit && [[ -n $name && ${#args[@]} -eq 2 ]]; then
+  if [[ $command == "list" ]]; then
+    [[ -d $name || -f $name ]] || die "target path '$name' not found"
+    resolve_pr_file "$name"
+  elif [[ $command == "check" && (-d $name || -f $name) ]]; then
+    if [[ $name == */* || $name == *.json || ! -f $file ]]; then
+      resolve_pr_file "$name"
     else
-      die "target path '$name' not found"
-    fi
-  elif [[ "$command" == "check" ]]; then
-    if [[ "$name" == */* || "$name" == *.json ]]; then
-      if [[ -d "$name" ]]; then
-        file="$name/nixpkgs-prs.json"
-        name=""
-      elif [[ -f "$name" ]]; then
-        file="$name"
-        name=""
-      fi
-    elif [[ -d "$name" ]]; then
-      if [[ -f "$file" ]]; then
-        has_entry=$(jq -r --arg n "$name" 'if has($n) then "yes" else "no" end' "$file" 2>/dev/null) || die "$file is not valid JSON"
-        if [[ "$has_entry" != "yes" ]]; then
-          file="$name/nixpkgs-prs.json"
-          name=""
-        fi
-      else
-        file="$name/nixpkgs-prs.json"
-        name=""
-      fi
-    elif [[ -f "$name" ]]; then
-      if [[ -f "$file" ]]; then
-        has_entry=$(jq -r --arg n "$name" 'if has($n) then "yes" else "no" end' "$file" 2>/dev/null) || die "$file is not valid JSON"
-        if [[ "$has_entry" != "yes" ]]; then
-          file="$name"
-          name=""
-        fi
-      else
-        file="$name"
-        name=""
-      fi
+      has_entry=$(jq -r --arg n "$name" 'has($n)' "$file" 2>/dev/null) || die "$file is not valid JSON"
+      [[ $has_entry == "true" ]] || resolve_pr_file "$name"
     fi
   fi
 fi
 
 entries() {
   if [[ -e $file ]]; then
-    jq . "$file" || die "$file is not valid JSON"
+    jq -e 'type == "object"' "$file" >/dev/null 2>&1 || die "$file is not a valid JSON object"
+    cat "$file"
   else
     echo '{}'
   fi
 }
 
-# Writes the entries from stdin, top-level keys sorted, entries as they are.
-# Empty input (a failed jq before it) leaves the file as it is.
-write_entries() {
-  local new
-  new=$(jq --indent 2 'to_entries | sort_by(.key) | from_entries') && [[ -n $new ]] \
-    || die "cannot update $file (is it valid JSON?)"
-  printf '%s\n' "$new" >"$file"
+# Acquires a cross-process directory lock, reloads current entries, applies the jq
+# filter, and atomically replaces $file so concurrent mutations are preserved.
+update_entries() {
+  local lockdir="${file}.lock" waited=0 cur new tmp
+  mkdir -p "$(dirname "$file")"
+  while ! mkdir "$lockdir" 2>/dev/null; do
+    ((++waited <= 200)) || die "timed out waiting for lock $lockdir"
+    sleep 0.05
+  done
+  trap 'rmdir "$lockdir" 2>/dev/null || true' EXIT
+  cur=$(entries)
+  new=$(jq "$@" <<<"$cur" | jq --indent 2 'to_entries | sort_by(.key) | from_entries') && [[ -n $new ]] \
+    || { rmdir "$lockdir" 2>/dev/null || true; trap - EXIT; die "cannot update $file"; }
+  tmp=$(mktemp "${file}.XXXXXX")
+  printf '%s\n' "$new" >"$tmp"
+  mv "$tmp" "$file"
+  rmdir "$lockdir" 2>/dev/null || true
+  trap - EXIT
 }
 
 need_entry() {
-  [[ -n $name ]] || die "$command needs the name of the entry"
-  entries | jq -e --arg n "$name" 'has($n)' >/dev/null || die "$file has no entry $name"
+  local target_name="${1:-$name}"
+  [[ -n $target_name ]] || die "$command needs the name of the entry"
+  entries | jq -e --arg n "$target_name" 'has($n)' >/dev/null || die "$file has no entry $target_name"
 }
 
-# The narHash of commit $rev of OWNER/REPO $1.
 nar_hash() {
   [[ $rev =~ ^[0-9a-f]{40}$ ]] || die "the commit must be a full 40-character SHA"
   nix flake prefetch --json "github:$1/$rev" | jq -er .hash || die "cannot fetch github:$1/$rev"
 }
 
-system() {
-  nix eval --raw --impure --expr builtins.currentSystem
+system() { nix eval --raw --impure --expr builtins.currentSystem; }
+
+strip_channel() {
+  local ch="$1"
+  [[ $ch == github:*/*/* ]] && ch="${ch#github:*/*/}"
+  printf '%s' "$ch"
 }
 
 case "$command" in
   add)
-    [[ -n "$pr" && "$pr" =~ ^[0-9]+$ ]] || die "add needs a PR number or GitHub pull request URL (or --pr NUMBER)"
-
+    [[ -n $pr && $pr =~ ^[0-9]+$ ]] || die "add needs a PR number or GitHub pull request URL (or --pr NUMBER)"
     auto_detect=false
-    if $pr_positional || $auto_flag; then
-      auto_detect=true
-    fi
+    ($pr_positional || $auto_flag) && auto_detect=true
 
     pr_title=""
     if $auto_detect; then
       pr_json=$(gh_api "repos/$upstream/pulls/$pr")
-      if [[ -n "$pr_json" && "$pr_json" != "null" ]]; then
+      if [[ -n $pr_json && $pr_json != "null" ]]; then
         pr_title=$(jq -r '.title // ""' <<<"$pr_json")
-        if [[ -z "$repo" ]]; then
+        if [[ -z $repo ]]; then
           repo=$(jq -r '.head.repo.full_name // empty' <<<"$pr_json")
-          if [[ -z "$repo" ]]; then
+          if [[ -z $repo ]]; then
             head_user=$(jq -r '.head.user.login // empty' <<<"$pr_json")
-            [[ -n "$head_user" ]] && repo="$head_user/nixpkgs"
+            [[ -n $head_user ]] && repo="$head_user/nixpkgs"
           fi
         fi
-        if ! $no_pin && [[ -z "$rev" ]]; then
+        if ! $no_pin && [[ -z $rev ]]; then
           head_sha=$(jq -r '.head.sha // empty' <<<"$pr_json")
-          if [[ "$head_sha" =~ ^[0-9a-f]{40}$ ]]; then
-            rev="$head_sha"
-          fi
+          [[ $head_sha =~ ^[0-9a-f]{40}$ ]] && rev="$head_sha"
         fi
       fi
 
-      if [[ -z "$attrs" || ((${#modules[@]} == 0)) || ((${#python_pkgs[@]} == 0)) ]]; then
+      if [[ -z $attrs || ${#modules[@]} -eq 0 || ${#python_pkgs[@]} -eq 0 ]]; then
         files_json=$(gh_api_files "repos/$upstream/pulls/$pr/files")
-        if [[ -n "$files_json" && "$files_json" != "null" && "$files_json" != "[]" ]]; then
-          if [[ -z "$attrs" ]]; then
-            inferred_attrs=$(jq -r '
-              [ .[] | .filename | capture("^pkgs/by-name/[^/]+/(?<attr>[^/]+)/") | .attr ]
-              | unique | join(",")' <<<"$files_json" 2>/dev/null || true)
-            if [[ -n "$inferred_attrs" ]]; then
-              attrs="$inferred_attrs"
-            fi
+        if [[ -n $files_json && $files_json != "null" && $files_json != "[]" ]]; then
+          if [[ -z $attrs ]]; then
+            inferred_attrs=$(jq -r '[.[] | .filename | capture("^pkgs/by-name/[^/]+/(?<attr>[^/]+)/") | .attr] | unique | join(",")' <<<"$files_json" 2>/dev/null || true)
+            [[ -n $inferred_attrs ]] && attrs="$inferred_attrs"
           fi
           if ((${#python_pkgs[@]} == 0)); then
             while IFS= read -r py_name; do
-              [[ -z "$py_name" ]] && continue
-              python_pkgs+=("$py_name")
-            done < <(jq -r '
-              [ .[] | .filename | capture("^pkgs/development/python-modules/(?<py>[^/]+)/") | .py ]
-              | unique[]' <<<"$files_json" 2>/dev/null || true)
+              [[ -n $py_name ]] && python_pkgs+=("$py_name")
+            done < <(jq -r '[.[] | .filename | capture("^pkgs/development/python-modules/(?<py>[^/]+)/") | .py] | unique[]' <<<"$files_json" 2>/dev/null || true)
           fi
           if ((${#modules[@]} == 0)); then
             while IFS= read -r mod_path; do
-              [[ -z "$mod_path" ]] && continue
-              mod_name=$(basename "$mod_path" .nix)
-              modules+=("$mod_name=$mod_path")
-            done < <(jq -r '
-              [ .[] | .filename | select(startswith("nixos/modules/")) | select(endswith(".nix")) | select(. != "nixos/modules/module-list.nix") ]
-              | unique[]' <<<"$files_json" 2>/dev/null || true)
+              [[ -n $mod_path ]] && modules+=("$(basename "$mod_path" .nix)=$mod_path")
+            done < <(jq -r '[.[] | .filename | select(startswith("nixos/modules/") and endswith(".nix") and . != "nixos/modules/module-list.nix")] | unique[]' <<<"$files_json" 2>/dev/null || true)
           fi
         fi
       fi
 
-      if [[ -z "$attrs" && ((${#python_pkgs[@]} == 0)) && -n "$pr_title" ]]; then
-        title_cand=$(sed -E 's/^[[:space:]]*(\[[^]]+\][[:space:]]*)?([^:, ]+):.*/\2/' <<<"$pr_title")
-        if [[ -n "$title_cand" && "$title_cand" != */* ]]; then
-          attrs="$title_cand"
+      if [[ -z $attrs && ${#python_pkgs[@]} -eq 0 && -n $pr_title ]]; then
+        title_cand=$(extract_title_pkg "$pr_title")
+        if [[ -n $title_cand && $title_cand != */* ]]; then
+          if [[ $title_cand == python3Packages.* ]]; then
+            python_pkgs+=("${title_cand#python3Packages.}")
+          else
+            attrs="$title_cand"
+          fi
         fi
       fi
     fi
 
-    if $pin_explicit && ! $no_pin && [[ -z "$rev" ]]; then
-      pr_json=$(gh_api "repos/$upstream/pulls/$pr")
-      head_sha=$(jq -r '.head.sha // empty' <<<"$pr_json")
-      [[ -n "$head_sha" && "$head_sha" =~ ^[0-9a-f]{40}$ ]] || die "--pin requested but cannot determine latest commit from GitHub"
+    if $pin_explicit && ! $no_pin && [[ -z $rev ]]; then
+      head_sha=$(gh_api "repos/$upstream/pulls/$pr" | jq -r '.head.sha // empty')
+      [[ $head_sha =~ ^[0-9a-f]{40}$ ]] || die "--pin requested but cannot determine latest commit from GitHub"
       rev="$head_sha"
     fi
 
-    [[ -n "$name" || $auto_detect ]] || die "add needs the name of the entry"
-    [[ -n "$repo" && "$repo" == */* ]] || die "add needs --repo OWNER/REPO (where the PR's branch is)"
-    [[ -n "$attrs" || ${#python_pkgs[@]} -gt 0 ]] || die "add needs --attrs (the packages to take from the PR)"
+    [[ -n $name ]] || $auto_detect || die "add needs the name of the entry"
+    [[ -n $repo ]] || die "add needs --repo OWNER/REPO (where the PR's branch is)"
+    valid_repo "$repo"
+    [[ -n $attrs || ${#python_pkgs[@]} -gt 0 ]] || die "add needs --attrs (the packages to take from the PR)"
 
-    if [[ -z "$name" ]]; then
-      if [[ -n "$attrs" ]]; then
-        first_attr="${attrs%%,*}"
-        if [[ -n "$pr_title" ]]; then
-          title_cand=$(sed -E 's/^[[:space:]]*(\[[^]]+\][[:space:]]*)?([^:, ]+):.*/\2/' <<<"$pr_title")
-          found=false
-          IFS=',' read -ra attr_list <<<"$attrs"
-          for a in "${attr_list[@]}"; do
-            if [[ "$a" == "$title_cand" ]]; then
-              name="$a"
-              found=true
-              break
-            fi
-          done
-          $found || name="$first_attr"
-        else
-          name="$first_attr"
-        fi
+    if [[ -z $name ]]; then
+      if [[ -n $attrs ]]; then
+        title_cand=$(extract_title_pkg "$pr_title")
+        name="${attrs%%,*}"
+        IFS=',' read -ra attr_list <<<"$attrs"
+        for a in "${attr_list[@]}"; do [[ $a == "$title_cand" ]] && { name="$a"; break; }; done
       elif ((${#python_pkgs[@]} >= 1)); then
         name="${python_pkgs[0]}"
       elif ((${#modules[@]} >= 1)); then
         name="${modules[0]%%=*}"
       fi
+      [[ -n $name ]] || name="pr-$pr"
     fi
-    [[ -n "$name" ]] || name="pr-$pr"
+    valid_name "$name"
 
-    if entries | jq -e --arg n "$name" 'has($n)' >/dev/null; then
-      die "$file already has an entry $name (remove it first)"
-    fi
+    entries_data=$(entries)
+    jq -e --arg n "$name" 'has($n)' <<<"$entries_data" >/dev/null && die "$file already has an entry $name (remove it first)"
 
     modules_json='{}'
     for module in "${modules[@]}"; do
       [[ $module == ?*=?* ]] || die "--module needs NAME=PATH"
       modules_json=$(jq --arg n "${module%%=*}" --arg p "${module#*=}" '.[$n] = $p' <<<"$modules_json")
     done
+
     paths_json='{}'
     IFS=',' read -ra allowed <<<"$attrs${scope:+,$scope}"
+    for py in "${python_pkgs[@]}"; do allowed+=("python3Packages.$py"); done
     for path in "${paths[@]}"; do
       [[ $path == ?*=?* ]] || die "--path needs NAME=PATH"
-      pname="${path%%=*}"
-      found=false
-      for a in "${allowed[@]}"; do
-        if [[ $a == "$pname" ]]; then found=true; break; fi
-      done
-      $found || die "--path $pname is not in --attrs or --scope"
+      pname="${path%%=*}" found=false
+      for a in "${allowed[@]}"; do [[ $a == "$pname" ]] && { found=true; break; }; done
+      $found || die "--path $pname is not in --attrs, --scope, or python3Packages.<--python>"
       paths_json=$(jq --arg n "$pname" --arg p "${path#*=}" '.[$n] = $p' <<<"$paths_json")
     done
+
     python_json='[]'
-    for py in "${python_pkgs[@]}"; do
-      python_json=$(jq --arg p "$py" '. + [$p]' <<<"$python_json")
-    done
+    if ((${#python_pkgs[@]} > 0)); then
+      python_json=$(printf '%s\n' "${python_pkgs[@]}" | jq -R . | jq -s .)
+    fi
 
+    until_ch=""
+    $channel_explicit && until_ch=$(strip_channel "$channel")
     hash=""
-    [[ -z "$rev" ]] || hash=$(nar_hash "$repo")
+    [[ -z $rev ]] || hash=$(nar_hash "$repo")
 
-    entries | jq --arg n "$name" --argjson pr "$pr" --arg owner "${repo%%/*}" --arg repo "${repo#*/}" \
-      --arg rev "$rev" --arg h "$hash" --arg upstream "$upstream" \
+    new_entry=$(jq -n --argjson pr "$pr" --arg owner "${repo%%/*}" --arg repo "${repo#*/}" \
+      --arg rev "$rev" --arg h "$hash" --arg upstream "$upstream" --arg untilCh "$until_ch" \
       --arg attrs "$attrs" --arg scope "$scope" --argjson modules "$modules_json" --argjson paths "$paths_json" \
       --argjson python "$python_json" '
-      .[$n] = ({pr: $pr, owner: $owner, repo: $repo, rev: $rev, narHash: $h, attrs: (if $attrs == "" then [] else ($attrs | split(",")) end)}
+      ({pr: $pr, owner: $owner, repo: $repo, rev: $rev, narHash: $h, attrs: (if $attrs == "" then [] else ($attrs | split(",")) end)}
         + (if $upstream != "NixOS/nixpkgs" then {upstream: $upstream} else {} end)
+        + (if $untilCh != "" then {untilChannel: $untilCh} else {} end)
         + (if $scope == "" then {} else {scope: ($scope | split(","))} end)
         + (if $paths == {} then {} else {paths: $paths} end)
         + (if $modules == {} then {} else {modules: $modules} end)
-        + (if $python == [] then {} else {pythonPackages: $python} end))' | write_entries
-    if [[ -n "$rev" ]]; then
+        + (if $python == [] then {} else {pythonPackages: $python} end))')
+    # shellcheck disable=SC2016  # jq program
+    update_entries --arg f "$file" --arg n "$name" --argjson entry "$new_entry" \
+      'if has($n) then ($f + " already has an entry " + $n + " (remove it first)\n" | halt_error(1)) else .[$n] = $entry end'
+    if [[ -n $rev ]]; then
       echo "added $name, pinned to $rev ($hash)"
     else
       echo "added $name; pin it with: nix-detour pr pin $name SHA"
     fi
     ;;
   pin)
-    if [[ "$name" == "--all" || "$name" == "-a" ]] || $all_entries; then
-      mapfile -t keys < <(entries | jq -r 'keys[]' 2>/dev/null)
+    entries_data=$(entries)
+    if [[ $name == "--all" || $name == "-a" ]] || $all_entries; then
+      mapfile -t keys < <(jq -r 'keys[]' <<<"$entries_data")
       for k in "${keys[@]}"; do
-        pr_num=$(entries | jq -r --arg n "$k" '.[$n].pr')
-        cur_rev=$(entries | jq -r --arg n "$k" '.[$n].rev // ""')
-        cur_owner=$(entries | jq -r --arg n "$k" '.[$n].owner')
-        cur_repo=$(entries | jq -r --arg n "$k" '.[$n].repo')
-        entry_upstream=$(entries | jq -r --arg n "$k" '.[$n].upstream // empty')
-        target_upstream="${entry_upstream:-$upstream}"
-        pr_info=$(gh_api "repos/$target_upstream/pulls/$pr_num")
-        latest_sha=$(jq -r '.head.sha // empty' <<<"$pr_info")
-        if [[ -z "$latest_sha" || ! "$latest_sha" =~ ^[0-9a-f]{40}$ ]]; then
+        [[ -n $k ]] || continue
+        IFS=$'\x1f' read -r pr_num cur_rev owner_repo entry_upstream < <(
+          jq -r --arg n "$k" '.[$n] | [(.pr | tostring), (.rev // ""), "\(.owner)/\(.repo)", (.upstream // "")] | join("\u001f")' <<<"$entries_data"
+        )
+        latest_sha=$(gh_api "repos/${entry_upstream:-$upstream}/pulls/$pr_num" | jq -r '.head.sha // empty')
+        if [[ ! $latest_sha =~ ^[0-9a-f]{40}$ ]]; then
           echo "$k (#$pr_num): could not fetch latest commit from GitHub, skipping" >&2
           continue
         fi
-        if [[ "$latest_sha" == "$cur_rev" ]]; then
+        if [[ $latest_sha == "$cur_rev" ]]; then
           echo "$k is already up to date at ${cur_rev:0:12}"
         else
           rev="$latest_sha"
-          hash=$(nar_hash "$cur_owner/$cur_repo")
-          entries | jq --arg n "$k" --arg rev "$latest_sha" --arg h "$hash" \
-            '.[$n].rev = $rev | .[$n].narHash = $h' | write_entries
-          echo "$k updated to ${latest_sha:0:12} ($hash)"
+          hash=$(nar_hash "$owner_repo")
+          # Reload and merge under lock so concurrent removals/additions are preserved.
+          # shellcheck disable=SC2016  # jq program
+          update_entries --arg n "$k" --arg rev "$rev" --arg h "$hash" \
+            'if has($n) then .[$n].rev = $rev | .[$n].narHash = $h else . end'
+          if entries | jq -e --arg n "$k" 'has($n)' >/dev/null; then
+            echo "$k updated to ${rev:0:12} ($hash)"
+          fi
         fi
       done
       exit 0
@@ -409,66 +376,64 @@ case "$command" in
 
     need_entry
     rev="${args[2]:-}"
-    owner_repo="$(entries | jq -r --arg n "$name" '.[$n] | "\(.owner)/\(.repo)"')"
-    if [[ -z "$rev" ]]; then
-      pr_num=$(entries | jq -r --arg n "$name" '.[$n].pr')
-      cur_rev=$(entries | jq -r --arg n "$name" '.[$n].rev // ""')
-      entry_upstream=$(entries | jq -r --arg n "$name" '.[$n].upstream // empty')
-      target_upstream="${entry_upstream:-$upstream}"
-      pr_info=$(gh_api "repos/$target_upstream/pulls/$pr_num")
-      latest_sha=$(jq -r '.head.sha // empty' <<<"$pr_info")
-      [[ -n "$latest_sha" && "$latest_sha" =~ ^[0-9a-f]{40}$ ]] || die "cannot determine latest commit for $name from GitHub: please specify a SHA"
-      if [[ "$latest_sha" == "$cur_rev" ]]; then
-        cur_hash=$(entries | jq -r --arg n "$name" '.[$n].narHash // ""')
+    IFS=$'\x1f' read -r pr_num cur_rev cur_hash owner_repo entry_upstream < <(
+      jq -r --arg n "$name" '.[$n] | [(.pr | tostring), (.rev // ""), (.narHash // ""), "\(.owner)/\(.repo)", (.upstream // "")] | join("\u001f")' <<<"$entries_data"
+    )
+    if [[ -z $rev ]]; then
+      latest_sha=$(gh_api "repos/${entry_upstream:-$upstream}/pulls/$pr_num" | jq -r '.head.sha // empty')
+      [[ $latest_sha =~ ^[0-9a-f]{40}$ ]] || die "cannot determine latest commit for $name from GitHub: please specify a SHA"
+      if [[ $latest_sha == "$cur_rev" ]]; then
         echo "$name is already up to date at ${cur_rev:0:12} ($cur_hash)"
         exit 0
       fi
       rev="$latest_sha"
     fi
     hash=$(nar_hash "$owner_repo")
-    entries | jq --arg n "$name" --arg rev "$rev" --arg h "$hash" \
-      '.[$n].rev = $rev | .[$n].narHash = $h' | write_entries
+    # shellcheck disable=SC2016  # jq program
+    update_entries --arg f "$file" --arg n "$name" --arg rev "$rev" --arg h "$hash" \
+      'if has($n) then .[$n].rev = $rev | .[$n].narHash = $h else ($f + " has no entry " + $n + "\n" | halt_error(1)) end'
     echo "$name pinned to $rev ($hash)"
     ;;
   remove)
     need_entry
-    entries | jq --arg n "$name" 'del(.[$n])' | write_entries
+    valid_name "$name"
+    # shellcheck disable=SC2016  # jq program
+    update_entries --arg f "$file" --arg n "$name" \
+      'if has($n) then del(.[$n]) else ($f + " has no entry " + $n + "\n" | halt_error(1)) end'
     echo "removed $name"
     ;;
   list)
     entries | jq -r 'to_entries[] | [.key, "#\(.value.pr)",
-      (if .value.rev == "" then "not pinned" else .value.rev[0:12] end),
-      (.value.attrs | join(","))] | join("\u001f")' |
-      while IFS=$'\x1f' read -r n p r a; do
-        printf '%-24s %-8s %-12s %s\n' "$n" "$p" "$r" "$a"
-      done
+      (if (.value.rev // "") == "" then "not pinned" else .value.rev[0:12] end),
+      (((.value.attrs // []) + ((.value.pythonPackages // []) | map("python3Packages." + .))) | join(","))]
+      | join("\u001f")' |
+      while IFS=$'\x1f' read -r n p r a; do printf '%-24s %-8s %-12s %s\n' "$n" "$p" "$r" "$a"; done
     ;;
   eval)
     need_entry
-    nix eval --json "$flake#nixpkgsPrs.$(system).\"$name\".packages" \
+    flake_ref=$(to_flake "$flake")
+    nix eval --json "$flake_ref#nixpkgsPrs.$(system).\"$name\".packages" \
       --apply 'builtins.mapAttrs (_: p: p.drvPath)' | jq -r 'to_entries[] | "\(.key) \(.value)"'
     ;;
   merged)
-    merged=$(nix eval --json "$flake#nixpkgsPrs.$(system)" --apply 'builtins.mapAttrs (_: c: c.merged)') \
-      || die "cannot evaluate $flake#nixpkgsPrs"
+    flake_ref=$(to_flake "$flake")
+    merged=$(nix eval --json "$flake_ref#nixpkgsPrs.$(system)" --apply 'builtins.mapAttrs (_: c: c.merged)') \
+      || die "cannot evaluate $flake_ref#nixpkgsPrs"
     jq -r 'to_entries[] | "\(if .value then "merged" else "open" end) \(.key)"' <<<"$merged"
     ;;
   check)
-    channel_branch="$channel"
-    if [[ $channel_branch == github:*/*/* ]]; then
-      channel_branch="${channel_branch#github:*/*/}"
-    fi
+    default_branch=$(strip_channel "$channel")
     target_names=()
-    if [[ -n "$name" ]]; then
-      need_entry
-      target_names=("$name")
+    if [[ -n $name ]]; then
+      entries_data=$(entries)
+      for target_name in "${args[@]:1}"; do
+        jq -e --arg n "$target_name" 'has($n)' <<<"$entries_data" >/dev/null || die "$file has no entry $target_name"
+        target_names+=("$target_name")
+      done
     else
-      if [[ ! -f "$file" ]]; then
-        $as_json && echo "{}" || echo "no $file found"
-        exit 0
-      fi
-      raw_keys=$(entries | jq -r 'keys[]') || exit 1
-      mapfile -t target_names <<<"$raw_keys"
+      [[ -f $file ]] || { $as_json && echo "{}" || echo "no $file found"; exit 0; }
+      entries_data=$(entries)
+      mapfile -t target_names < <(jq -r 'keys[]' <<<"$entries_data")
     fi
 
     if ((${#target_names[@]} == 0)); then
@@ -477,96 +442,80 @@ case "$command" in
     fi
 
     is_tty=false
-    if [[ -t 1 ]] && ! $as_json; then
-      is_tty=true
-    fi
-
-    json_results='{}'
-    if ! $as_json; then
-      printf '%-20s %-8s %-16s %s\n' "NAME" "PR" "STATUS" "DETAILS"
-    fi
+    [[ -t 1 ]] && ! $as_json && is_tty=true
+    $as_json || printf '%-20s %-8s %-16s %s\n' "NAME" "PR" "STATUS" "DETAILS"
 
     tmpdir=$(mktemp -d)
     trap 'rm -rf "$tmpdir"' EXIT
 
-    for n in "${target_names[@]}"; do
+    # Cap concurrent GitHub API queries to avoid secondary rate limits.
+    running=0
+    for idx in "${!target_names[@]}"; do
+      n="${target_names[$idx]}"
       (
-        pr_num=$(entries | jq -r --arg n "$n" '.[$n].pr // empty')
-        if [[ -z $pr_num ]]; then
-          exit 0
+        IFS=$'\x1f' read -r pr_num entry_upstream entry_channel < <(
+          jq -r --arg n "$n" '.[$n] | [(.pr // "" | tostring), (.upstream // ""), (.untilChannel // "")] | join("\u001f")' <<<"$entries_data"
+        )
+        if [[ ! $pr_num =~ ^[0-9]+$ ]] || ((pr_num <= 0)); then
+          exit 1
         fi
-        entry_upstream=$(entries | jq -r --arg n "$n" '.[$n].upstream // empty')
         target_upstream="${entry_upstream:-$upstream}"
+        channel_branch="$default_branch"
+        ! $channel_explicit && [[ -n $entry_channel ]] && channel_branch=$(strip_channel "$entry_channel")
 
         pr_json=$(gh_api "repos/$target_upstream/pulls/$pr_num")
-        status="unknown"
-        details="GitHub API unavailable"
-        state="unknown"
-        draft="false"
-        merged="false"
-        in_channel="false"
-        title=""
+        status="unknown" details="GitHub API unavailable" state="unknown"
+        draft="false" merged="false" in_channel="false" title=""
         html_url="https://github.com/$target_upstream/pull/$pr_num"
 
-        if [[ -n "$pr_json" && "$pr_json" != "null" ]]; then
-          state=$(jq -r '.state // "unknown"' <<<"$pr_json")
-          draft=$(jq -r '.draft // false' <<<"$pr_json")
-          merged=$(jq -r '.merged // false' <<<"$pr_json")
-          merge_commit=$(jq -r '.merge_commit_sha // empty' <<<"$pr_json")
-          title=$(jq -r '.title // ""' <<<"$pr_json")
-          html_url=$(jq -r '.html_url // ""' <<<"$pr_json")
+        if [[ -n $pr_json && $pr_json != "null" ]]; then
+          IFS=$'\x1f' read -r state draft merged merge_commit title parsed_url < <(
+            jq -r '[(.state // "unknown"), (.draft // false | tostring), (.merged // false | tostring), (.merge_commit_sha // ""), (.title // ""), (.html_url // "")] | join("\u001f")' <<<"$pr_json"
+          )
+          [[ -n $parsed_url ]] && html_url="$parsed_url"
 
-          if [[ "$merged" == "true" ]]; then
-            comp_json=""
-            if [[ -n "$merge_commit" ]]; then
-              comp_json=$(gh_api "repos/$target_upstream/compare/$channel_branch...$merge_commit")
-            fi
-            comp_status=$(jq -r '.status // empty' <<<"$comp_json")
-            if [[ "$comp_status" == "behind" || "$comp_status" == "identical" ]]; then
-              status="in-channel"
-              in_channel="true"
-              details="landed in $channel_branch (ready to release)"
+          if [[ $merged == "true" ]]; then
+            comp_status=""
+            [[ -n $merge_commit ]] && comp_status=$(gh_api "repos/$target_upstream/compare/$channel_branch...$merge_commit" | jq -r '.status // empty')
+            if [[ $comp_status == "behind" || $comp_status == "identical" ]]; then
+              status="in-channel" in_channel="true" details="landed in $channel_branch (ready to release)"
             else
-              status="merged"
-              details="merged upstream (waiting for $channel_branch)"
+              status="merged" details="merged upstream (waiting for $channel_branch)"
             fi
-          elif [[ "$draft" == "true" ]]; then
-            status="draft"
-            details="draft PR"
-          elif [[ "$state" == "closed" ]]; then
-            status="closed"
-            details="closed without merge"
+          elif [[ $draft == "true" ]]; then
+            status="draft" details="draft PR"
+          elif [[ $state == "closed" ]]; then
+            status="closed" details="closed without merge"
           else
-            status="open"
-            details="open upstream"
+            status="open" details="open upstream"
           fi
         fi
 
-        hash_key=$(printf '%s' "$n" | sha256sum | cut -d' ' -f1)
-        jq -n \
-          --arg n "$n" --argjson pr "$pr_num" \
-          --arg status "$status" --arg state "$state" --argjson draft "$draft" \
-          --argjson merged "$merged" --argjson inChannel "$in_channel" \
-          --arg details "$details" --arg title "$title" --arg url "$html_url" \
-          '{($n): {pr: $pr, status: $status, state: $state, draft: $draft, merged: $merged, inChannel: $inChannel, details: $details, title: $title, url: $url}}' \
-          > "$tmpdir/$hash_key.json"
+        jq -n --arg n "$n" --argjson pr "$pr_num" --arg status "$status" --arg state "$state" \
+          --argjson draft "$draft" --argjson merged "$merged" --argjson inChannel "$in_channel" \
+          --arg details "$details" --arg title "$title" --arg url "$html_url" --arg ch "$channel_branch" \
+          '{($n): {pr: $pr, status: $status, state: $state, draft: $draft, merged: $merged, inChannel: $inChannel, details: $details, title: $title, url: $url, channel: $ch}}' \
+          >"$tmpdir/$idx.json.tmp"
+        mv "$tmpdir/$idx.json.tmp" "$tmpdir/$idx.json"
       ) &
+      ((++running))
+      if ((running >= 6)); then
+        if ((BASH_VERSINFO[0] >= 5)); then wait -n || true; ((--running)); else wait; running=0; fi
+      fi
     done
     wait
 
-    for n in "${target_names[@]}"; do
-      hash_key=$(printf '%s' "$n" | sha256sum | cut -d' ' -f1)
-      if [[ ! -f "$tmpdir/$hash_key.json" ]]; then
+    files_out=()
+    for idx in "${!target_names[@]}"; do
+      n="${target_names[$idx]}"
+      if [[ ! -s "$tmpdir/$idx.json" ]] || ! jq -e --arg n "$n" 'has($n)' "$tmpdir/$idx.json" >/dev/null 2>&1; then
         die "check failed for entry '$n'"
       fi
-      entry_res=$(cat "$tmpdir/$hash_key.json")
-      pr_num=$(jq -r --arg n "$n" '.[$n].pr' <<<"$entry_res")
-      status=$(jq -r --arg n "$n" '.[$n].status' <<<"$entry_res")
-      details=$(jq -r --arg n "$n" '.[$n].details' <<<"$entry_res")
-
-      if $as_json; then
-        json_results=$(jq -s '.[0] * .[1]' <<<"$json_results $entry_res")
-      else
+      files_out+=("$tmpdir/$idx.json")
+      if ! $as_json; then
+        IFS=$'\x1f' read -r pr_num status details < <(
+          jq -r --arg n "$n" '.[$n] | [(.pr | tostring), .status, .details] | join("\u001f")' "$tmpdir/$idx.json"
+        )
         status_display="$status"
         if $is_tty; then
           case "$status" in
@@ -580,9 +529,8 @@ case "$command" in
         printf '%-20s %-8s %-16s %s\n' "$n" "#$pr_num" "$status_display" "$details"
       fi
     done
-
     if $as_json; then
-      echo "$json_results" | jq .
+      jq -s 'add // {}' "${files_out[@]}"
     fi
     ;;
   *) die "unknown command $command (see --help)" ;;

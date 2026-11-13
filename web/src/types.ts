@@ -1,4 +1,4 @@
-export type HoldSource = 'stable' | 'current' | { rev: string; narHash: string };
+export type HoldSource = 'stable' | 'current' | 'previous' | { rev: string; narHash: string };
 
 export interface PatchObject {
   url: string;
@@ -26,16 +26,20 @@ export interface PrEntry {
   rev: string;
   narHash: string;
   attrs: string[];
+  pythonPackages?: string[];
   scope?: string[];
   paths?: Record<string, string>;
   modules?: Record<string, string>;
+  upstream?: string;
   untilChannel?: string;
+  auto?: boolean;
 }
 
 export type DetourKind = 'hold' | 'fix' | 'pr';
 export type DetourFilter = DetourKind | 'all' | 'stale' | 'ready';
 export type ViewMode = 'grid' | 'list';
 export type SortOption = 'age-desc' | 'age-asc' | 'name-asc' | 'name-desc' | 'kind' | 'ready';
+export type ToastKind = 'info' | 'error';
 
 export interface PrStatusInfo {
   pr: number;
@@ -69,9 +73,11 @@ export interface DetourItem {
   prNumber?: number;
   owner?: string;
   repo?: string;
+  upstream?: string;
   rev?: string;
   narHash?: string;
   attrs?: string[];
+  pythonPackages?: string[];
   scope?: string[];
   paths?: Record<string, string>;
   modules?: Record<string, string>;

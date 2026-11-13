@@ -88,76 +88,30 @@
         watch = import ./watch.nix { inherit lib; };
       };
 
-      # The CLI: add, remove, list and check holds, and the same for PR
-      # packages (`nix-detour pr`). Nix itself comes from the user's PATH.
-      packages = forAllSystems (pkgs: {
-        default = self.packages.${pkgs.stdenv.hostPlatform.system}.nix-detour;
-        web = pkgs.buildNpmPackage {
-          pname = "nix-detour-web";
-          version = "0.1.0";
-          src = ./web;
-          # Hashes come from package-lock.json, so Dependabot bumps need no hash update.
-          npmDeps = pkgs.importNpmLock { npmRoot = ./web; };
-          npmConfigHook = pkgs.importNpmLock.npmConfigHook;
-          # svelte-check: CI builds this, so type errors fail it.
-          doCheck = true;
-          checkPhase = ''
-            runHook preCheck
-            npm run check
-            runHook postCheck
-          '';
-          installPhase = ''
-            runHook preInstall
-            cp -r dist $out
-            runHook postInstall
-          '';
-        };
+      packages = forAllSystems (
+        pkgs:
+        let
+          nix-detour = pkgs.callPackage ./package.nix { };
+        in
+        {
+          default = nix-detour;
+          inherit nix-detour;
 
-        web-server = pkgs.writeShellApplication {
-          name = "nix-detour-web-server";
-          runtimeInputs = [ pkgs.python3 ];
-          text = ''
-            exec python3 ${./web/server.py} --static-dir "${
-              self.packages.${pkgs.stdenv.hostPlatform.system}.web
-            }" "$@"
+          web = pkgs.runCommand "nix-detour-web-${nix-detour.version}" { } ''
+            ln -s ${nix-detour}/share/nix-detour/web $out
           '';
-        };
 
-        nix-detour =
-          let
-            releaseCheck = pkgs.writeShellApplication {
-              name = "nix-detour-release-check";
-              runtimeInputs = [
-                pkgs.coreutils
-                pkgs.jq
-              ];
-              text = builtins.readFile ./scripts/release-check.sh;
-            };
-            prs = pkgs.writeShellApplication {
-              name = "nix-detour-pr";
-              runtimeInputs = [
-                pkgs.coreutils
-                pkgs.curl
-                pkgs.jq
-              ];
-              text = builtins.readFile ./scripts/prs.sh;
-            };
-            webServer = self.packages.${pkgs.stdenv.hostPlatform.system}.web-server;
-          in
-          pkgs.writeShellApplication {
-            name = "nix-detour";
-            runtimeInputs = [
-              pkgs.coreutils
-              pkgs.git
-              pkgs.jq
-            ];
-            text =
-              builtins.replaceStrings
-                [ "@releaseCheck@" "@prs@" "@webServer@" ]
-                [ (lib.getExe releaseCheck) (lib.getExe prs) (lib.getExe webServer) ]
-                (builtins.readFile ./scripts/nix-detour.sh);
-          };
-      });
+          web-server =
+            pkgs.runCommand "nix-detour-web-server-${nix-detour.version}"
+              {
+                meta.mainProgram = "nix-detour-web-server";
+              }
+              ''
+                mkdir -p $out/bin
+                ln -s ${nix-detour}/libexec/nix-detour/web-server $out/bin/nix-detour-web-server
+              '';
+        }
+      );
 
       apps = forAllSystems (pkgs: {
         default = {
@@ -167,7 +121,6 @@
         };
         web = {
           type = "app";
-          # Through the CLI, which the server adds holds with.
           program = toString (
             pkgs.writeShellScript "nix-detour-web" ''
               exec ${lib.getExe self.packages.${pkgs.stdenv.hostPlatform.system}.nix-detour} web "$@"
@@ -177,15 +130,23 @@
         };
       });
 
-      # Tests of mkHolds, mkPrs and the CLI.
       checks = forAllSystems (
         pkgs:
-        import ./tests {
-          inherit pkgs nixpkgs nixpkgs-stable;
-          inherit (self.lib) mkHolds;
-          mkPrs = args: import ./prs.nix ({ inherit lib; } // args);
-          inherit (self.lib) watch;
+        let
           inherit (self.packages.${pkgs.stdenv.hostPlatform.system}) nix-detour;
+        in
+        (import ./tests {
+          inherit
+            pkgs
+            nixpkgs
+            nixpkgs-stable
+            nix-detour
+            ;
+          inherit (self.lib) mkHolds watch;
+          mkPrs = args: import ./prs.nix ({ inherit lib; } // args);
+        })
+        // {
+          package-smoke = nix-detour.passthru.tests.cli;
         }
       );
 
