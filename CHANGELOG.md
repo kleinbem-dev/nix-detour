@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- `pr add`: shorthand syntax accepts PR number or GitHub pull request URL
+  directly (`pr add 587609` or `pr add <url>`), auto-detecting fork repository,
+  package attributes (from `pkgs/by-name`), NixOS modules, and latest commit
+  SHA from GitHub. Supports `--pin` and `--no-pin`.
+- `pr pin`: omitting the commit SHA re-pins the entry to its latest head commit
+  from GitHub; `--all` updates all active entries in the file in one command.
+- `pr check`: upstream PR state and channel landing checks run concurrently in
+  parallel.
+
 - Update action: lists holds a target still has unheld (new `unreached`
   output and report section), from a package set the holds overlay doesn't
   reach. On 2026-11-11 a buzz-cli hold changed nothing: cadre's home-manager

@@ -671,9 +671,48 @@ in
           echo '{"state":"open","draft":false,"merged":false,"title":"subpr"}'
         elif [ "$2" = "repos/NixOS/nixpkgs/compare/nixos-unstable...abc12345" ]; then
           echo '{"status":"behind"}'
+        elif [ "$2" = "repos/NixOS/nixpkgs/pulls/500" ]; then
+          echo '{"head":{"repo":{"full_name":"autouser/nixpkgs"},"sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"title":"autopkg: init at 1.0.0"}'
+        elif [ "$2" = "repos/NixOS/nixpkgs/pulls/500/files" ]; then
+          echo '[{"filename":"pkgs/by-name/au/autopkg/package.nix"},{"filename":"nixos/modules/services/misc/autopkg.nix"}]'
+        elif [ "$2" = "repos/NixOS/nixpkgs/pulls/501" ]; then
+          echo '{"head":{"repo":{"full_name":"autouser/nixpkgs"},"sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},"title":"otherpkg: init at 0.1.0"}'
+        elif [ "$2" = "repos/NixOS/nixpkgs/pulls/501/files" ]; then
+          echo '[{"filename":"pkgs/by-name/ot/otherpkg/package.nix"}]'
         fi
         EOF
                 chmod +x gh
+
+                cat << 'EOF' > nix
+        #!/bin/sh
+        if [ "$1" = "flake" ] && [ "$2" = "prefetch" ]; then
+          echo '{"hash":"sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="}'
+        fi
+        EOF
+                chmod +x nix
+
+                # Shorthand pr add with auto-detection of repo, attrs, modules, and pin
+                PATH=".:$PATH" nix-detour pr add 500
+                test "$(jq -r .autopkg.owner nixpkgs-prs.json)" = "autouser"
+                test "$(jq -r .autopkg.rev nixpkgs-prs.json)" = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                test "$(jq -r .autopkg.narHash nixpkgs-prs.json)" = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+                test "$(jq -r '.autopkg.attrs | first' nixpkgs-prs.json)" = "autopkg"
+                test "$(jq -r .autopkg.modules.autopkg nixpkgs-prs.json)" = "nixos/modules/services/misc/autopkg.nix"
+
+                # Shorthand pr add with full URL
+                PATH=".:$PATH" nix-detour pr add https://github.com/NixOS/nixpkgs/pull/501
+                test "$(jq -r .otherpkg.owner nixpkgs-prs.json)" = "autouser"
+                test "$(jq -r .otherpkg.rev nixpkgs-prs.json)" = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+
+                # Pin update check
+                PATH=".:$PATH" nix-detour pr pin otherpkg > pin_one.txt
+                grep -q "is already up to date" pin_one.txt
+                PATH=".:$PATH" nix-detour pr pin --all > pin_all.txt
+                grep -q "is already up to date" pin_all.txt
+
+                nix-detour pr remove autopkg
+                nix-detour pr remove otherpkg
+
                 test "$(PATH=".:$PATH" nix-detour pr check --json mesh | jq -r .mesh.status)" = "open"
                 nix-detour pr add landed --pr 100 --repo someone/nixpkgs --attrs landed-pkg
                 test "$(PATH=".:$PATH" nix-detour pr check --json landed | jq -r .landed.status)" = "in-channel"
