@@ -22,8 +22,32 @@ let
     entry: src: name:
     if entry ? paths && entry.paths ? ${name} then
       "${src}/${entry.paths.${name}}"
+    else if lib.hasInfix "." name then
+      throw "nix-detour prs: ${name} is in a package set, so it needs an entry in `paths`"
     else
       "${src}/pkgs/by-name/${lib.substring 0 2 name}/${name}/package.nix";
+
+  # An attribute from a package set by its name; `gnomeExtensions.arcmenu` is
+  # a package inside a set.
+  pick = set: names: lib.genAttrs names (name: lib.getAttrFromPath (lib.splitString "." name) set);
+
+  # Flat packages as overlay attributes: a package inside a set replaces only
+  # its own attribute, the rest of `prev`'s set stays.
+  nest =
+    prev: flat:
+    let
+      byTop = lib.groupBy (name: lib.head (lib.splitString "." name)) (lib.attrNames flat);
+    in
+    lib.mapAttrs (
+      top: names:
+      if names == [ top ] then
+        flat.${top}
+      else
+        lib.updateManyAttrsByPath (map (name: {
+          path = lib.tail (lib.splitString "." name);
+          update = _: flat.${name};
+        }) names) prev.${top}
+    ) byTop;
 
   pythonPath =
     entry: src: name:
@@ -78,10 +102,10 @@ let
   # set, where they find the entry's other packages in the overlaid set.
   entryOverlay =
     entry: final: prev:
-    packagesOf final entry
+    nest prev (packagesOf final entry)
     // lib.optionalAttrs (entry.pythonPackages or [ ] != [ ]) {
       pythonPackagesExtensions = prev.pythonPackagesExtensions ++ [
-        (pyfinal: _: pythonPackagesOf pyfinal (lib.getAttrs entry.attrs final) entry)
+        (pyfinal: _: pythonPackagesOf pyfinal (pick final entry.attrs) entry)
       ];
     };
 
@@ -143,7 +167,7 @@ assert lib.assertMsg (lib.allUnique allPython) "nix-detour prs: a Python package
         # other in both directions, and on top of the consumer's own Python
         # overrides.
         withEntry = pkgs.extend (entryOverlay entry);
-        ours = lib.getAttrs entry.attrs withEntry;
+        ours = pick withEntry entry.attrs;
         python = lib.mapAttrs' (name: lib.nameValuePair "python3Packages.${name}") (
           lib.getAttrs (entry.pythonPackages or [ ]) withEntry.python3Packages
         );

@@ -109,6 +109,12 @@ let
           "fake-py-user"
         ];
       };
+      # A package inside a nixpkgs package set.
+      nested = {
+        pr = 5;
+        attrs = [ "gnomeExtensions.fake-ext" ];
+        paths."gnomeExtensions.fake-ext" = "pkgs/desktops/gnome/extensions/fake-ext/default.nix";
+      };
     };
   };
   withPrs = import nixpkgs {
@@ -246,7 +252,39 @@ let
         fake = false;
         old-hello = true;
         platform = false;
+        nested = false;
       };
+    };
+    # A package inside a set replaces only its own attribute.
+    testPrNestedInOverlay = {
+      expr = {
+        inherit (withPrs.gnomeExtensions.fake-ext) version;
+        siblingKept = withPrs.gnomeExtensions.arcmenu.drvPath == pkgs.gnomeExtensions.arcmenu.drvPath;
+      };
+      expected = {
+        version = "999.0";
+        siblingKept = true;
+      };
+    };
+    testPrNestedChecks = {
+      expr = builtins.attrNames prChecks.nested.packages;
+      expected = [ "gnomeExtensions.fake-ext" ];
+    };
+    testPrNestedNeedsPath = {
+      expr =
+        (builtins.tryEval
+          (
+            (mkPrs {
+              fetch = _: ./fake-pr;
+              prs.nopath = {
+                pr = 6;
+                attrs = [ "gnomeExtensions.fake-ext" ];
+              };
+            }).packages
+              pkgs
+          )."gnomeExtensions.fake-ext".drvPath
+        ).success;
+      expected = false;
     };
     testPrScopeInOverlay = {
       expr = withPrs.fake-plugins.one.version;
@@ -828,6 +866,10 @@ in
           echo '{"head":{"repo":{"full_name":"autouser/nixpkgs"},"sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},"title":"otherpkg: init at 0.1.0"}'
         elif [ "$2" = "repos/NixOS/nixpkgs/pulls/501/files" ]; then
           echo '[{"filename":"pkgs/by-name/ot/otherpkg/package.nix"}]'
+        elif [ "$2" = "repos/NixOS/nixpkgs/pulls/503" ]; then
+          echo '{"head":{"repo":{"full_name":"extuser/nixpkgs"},"sha":"dddddddddddddddddddddddddddddddddddddddd"},"title":"gnomeExtensions.fake-ext: 1.0 -> 2.0"}'
+        elif [ "$2" = "repos/NixOS/nixpkgs/pulls/503/files" ]; then
+          echo '[{"filename":"pkgs/desktops/gnome/extensions/fake-ext/default.nix"}]'
         elif [ "$2" = "repos/custom/nixpkgs/pulls/502" ]; then
           echo '{"head":{"repo":{"full_name":"pyuser/nixpkgs"},"sha":"cccccccccccccccccccccccccccccccccccccccc"},"title":"python3Packages.pyfoo: init at 1.0"}'
         elif [ "$2" = "repos/custom/nixpkgs/pulls/502/files" ]; then
@@ -853,6 +895,12 @@ in
                 test "$(jq -r .autopkg.narHash nixpkgs-prs.json)" = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
                 test "$(jq -r '.autopkg.attrs | first' nixpkgs-prs.json)" = "autopkg"
                 test "$(jq -r .autopkg.modules.autopkg nixpkgs-prs.json)" = "nixos/modules/services/misc/autopkg.nix"
+
+                # A package inside a set: the path comes from the PR's only package file.
+                PATH=".:$PATH" nix-detour pr add 503
+                test "$(jq -c '.["gnomeExtensions.fake-ext"] | {attrs, paths}' nixpkgs-prs.json)" = '{"attrs":["gnomeExtensions.fake-ext"],"paths":{"gnomeExtensions.fake-ext":"pkgs/desktops/gnome/extensions/fake-ext/default.nix"}}'
+                nix-detour pr remove gnomeExtensions.fake-ext
+                if nix-detour pr add ext --pr 4 --repo a/b --attrs gnomeExtensions.x --no-pin 2>/dev/null; then echo "a package in a set without --path should fail" >&2; exit 1; fi
 
                 # --python with custom --path, --upstream, --channel (untilChannel), --no-pin
                 PATH=".:$PATH" nix-detour pr add pyfoo --pr 502 --upstream custom/nixpkgs --python py-foo \
