@@ -262,6 +262,12 @@ case "$command" in
             python_pkgs+=("${title_cand#python3Packages.}")
           else
             attrs="$title_cand"
+            # A package inside a set (gnomeExtensions.arcmenu) has no by-name
+            # path: take the PR's only changed package file.
+            if [[ $attrs == *.* && ${#paths[@]} -eq 0 && -n ${files_json:-} ]]; then
+              pkg_file=$(jq -r '[.[] | .filename | select(startswith("pkgs/") and (endswith("/default.nix") or endswith("/package.nix")))] | unique | if length == 1 then .[0] else empty end' <<<"$files_json" 2>/dev/null || true)
+              [[ -n $pkg_file ]] && paths+=("$attrs=$pkg_file")
+            fi
           fi
         fi
       fi
@@ -311,6 +317,12 @@ case "$command" in
       for a in "${allowed[@]}"; do [[ $a == "$pname" ]] && { found=true; break; }; done
       $found || die "--path $pname is not in --attrs, --scope, or python3Packages.<--python>"
       paths_json=$(jq --arg n "$pname" --arg p "${path#*=}" '.[$n] = $p' <<<"$paths_json")
+    done
+
+    IFS=',' read -ra attr_list <<<"$attrs"
+    for a in "${attr_list[@]}"; do
+      [[ $a != *.* ]] || jq -e --arg a "$a" 'has($a)' <<<"$paths_json" >/dev/null ||
+        die "$a is in a package set: pass --path $a=<file in the PR>"
     done
 
     python_json='[]'

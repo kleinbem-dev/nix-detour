@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- PR entries take packages inside a package set, such as
+  `gnomeExtensions.arcmenu`: the overlay replaces only that attribute of the
+  set. They need their file in `paths`; `pr add <number>` takes it from the
+  PR when the PR changes one package file.
+
 ## 0.4.0 (2026-11-13)
 
 - Standalone `package.nix` (`pkgs.callPackage ./package.nix { }`) bundles the
