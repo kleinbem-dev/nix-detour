@@ -4,8 +4,6 @@
 @import "@kleinbem/web-config/base.css";
 @import "@kleinbem/web-config/badges.css";
 
-@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *, .dark, .dark *));
-
 dialog::backdrop {
   background: rgb(0 0 0 / 0.65);
   backdrop-filter: blur(4px);
