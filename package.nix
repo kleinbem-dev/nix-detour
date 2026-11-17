@@ -35,7 +35,7 @@ stdenvNoCC.mkDerivation (finalAttrs: {
     inherit (finalAttrs) pname version src;
     sourceRoot = "${finalAttrs.src.name}/web";
     fetcherVersion = 2;
-    hash = "sha256-n8grGEjz5TPxwltp+56YCmXLEGW0XT3UW7e13z2jCHc=";
+    hash = "sha256-iqnXBbhHvJRuTCrTtcEY1Fuv4bB0idwBB6Y7NC8Css8=";
   };
 
   npmRoot = "web";
@@ -72,7 +72,7 @@ stdenvNoCC.mkDerivation (finalAttrs: {
     runHook preInstall
 
     mkdir -p "$out/bin" "$out/libexec/nix-detour" "$out/share/nix-detour"
-    cp -r web/dist "$out/share/nix-detour/web"
+    cp -r web/build "$out/share/nix-detour/web"
     install -Dm644 overlay.nix prs.nix watch.nix -t "$out/share/nix-detour/nix"
 
     install -Dm755 scripts/release-check.sh "$out/libexec/nix-detour/release-check"

@@ -8,7 +8,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "prepare": "svelte-kit sync",
-    "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json && node test/utils.test.ts"
+    "check": "web-config check && svelte-kit sync && svelte-check --tsconfig ./tsconfig.json && node test/utils.test.ts"
   },
   "devDependencies": {
     "@sveltejs/adapter-static": "^4.0.1",
@@ -22,6 +22,6 @@
     "vite": "^8.3.5"
   },
   "dependencies": {
-    "@kleinbem/web-config": "github:kleinbem/web-config#main"
+    "@kleinbem/web-config": "github:kleinbem/web-config#v0.2.0"
   }
 }
