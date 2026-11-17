@@ -41,7 +41,7 @@ def _resolve_cli(explicit: str) -> str | None:
 
 
 PORT = int(args.port_pos) if args.port_pos and args.port_pos.isdigit() else args.port
-STATIC_DIR = args.static_dir_pos or args.static_dir or os.path.join(os.path.dirname(__file__), "dist")
+STATIC_DIR = args.static_dir_pos or args.static_dir or os.path.join(os.path.dirname(__file__), "build")
 CLI = _resolve_cli(args.cli)
 GH_BIN = shutil.which("gh")
 GIT_BIN = shutil.which("git")
