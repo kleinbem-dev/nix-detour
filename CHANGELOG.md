@@ -12,8 +12,9 @@
   hold-release action run the verification. releaseChecks entries carry
   `nixHoldsPackage` and `nixHoldsHeld` for it.
 - `hold add --from previous` reads the default branch's lock history
-  (first parents), so a lock committed only on a branch is never taken as the
-  last working one.
+  (first parents of `origin/HEAD`, `origin/main` or `origin/master`; `HEAD`
+  only without an `origin` remote), so a lock committed only on a branch is
+  never taken as the last working one.
 - PR entries take packages inside a package set, such as
   `gnomeExtensions.arcmenu`: the overlay replaces only that attribute of the
   set. They need their file in `paths`; `pr add <number>` takes it from the

@@ -68,6 +68,9 @@
             # (`worked`) and checks that the second still is that build.
             releaseChecks =
               pkgs:
+              let
+                heldPkgs = pkgs.extend overlay;
+              in
               lib.genAttrs (heldIn pkgs) (
                 name:
                 let
@@ -84,7 +87,7 @@
                 // {
                   nixHolds = entry;
                   nixHoldsPackage = lib.getAttrFromPath (lib.splitString "." name) pkgs;
-                  nixHoldsHeld = lib.getAttrFromPath (lib.splitString "." name) (pkgs.extend overlay);
+                  nixHoldsHeld = lib.getAttrFromPath (lib.splitString "." name) heldPkgs;
                 }
               );
           };

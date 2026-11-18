@@ -896,6 +896,20 @@ in
           lock b
           nix-detour hold add foo --reason r --no-record
           test "$(jq -r .foo.from.rev held-packages.json)" = a
+          # Without origin/HEAD, origin/main.
+          git remote set-head origin -d
+          nix-detour hold add foo2 --reason r --no-record
+          test "$(jq -r .foo2.from.rev held-packages.json)" = a
+        )
+        # An origin without a known default branch: no guessing from HEAD.
+        mkdir -p nodefault_repo && (
+          cd nodefault_repo
+          git init -q -b feature .
+          git remote add origin ../branch_origin
+          lock a; git add flake.lock; git commit -qm a
+          lock b
+          if nix-detour hold add foo --reason r 2>err.txt; then echo "an unknown default branch should fail" >&2; exit 1; fi
+          grep -q "default branch" err.txt
         )
 
         # worked: recorded from releaseChecks on the previous nixpkgs, verified
@@ -905,13 +919,13 @@ in
         #!${pkgs.runtimeShell}
         case "$*" in
           *"#releaseChecks --apply builtins.attrNames"*) echo '["x86_64-linux"]' ;;
-          *"--override-input nixpkgs github:NixOS/nixpkgs/a"*'nixHoldsPackage'*)
+          "flake prefetch"*) echo '{"hash":"sha256-c"}' ;;
+          *"--reference-lock-file"*'nixHoldsPackage'*)
             echo '{"out":"/nix/store/aaaa-foo-1.0","version":"1.0"}' ;;
           *'"foo" or { }).nixHoldsHeld'*) echo '{"out":"/nix/store/bbbb-foo-1.0","version":"1.0"}' ;;
-          *"#releaseChecks.x86_64-linux --apply"*'mapAttrs'*)
+          *"#releaseChecks.x86_64-linux --apply"*'filterAttrs'*)
             jq -c --arg w "$(jq -r '.foo.worked.outPaths."x86_64-linux" // empty' held-packages.json)" '{
-              foo: {plain: true, worked: (if $w == "" then null else $w end), now: "/nix/store/aaaa-foo-1.0"},
-              fixed: {plain: false, worked: null, now: "/nix/store/cccc"}}' <<< null ;;
+              foo: {worked: (if $w == "" then null else $w end), now: "/nix/store/aaaa-foo-1.0"}}' <<< null ;;
           *) exit 1 ;;
         esac
         EOF
@@ -925,12 +939,11 @@ in
           nix-detour hold verify > v0.txt
           grep -qx 'unrecorded foo x86_64-linux' v0.txt
           nix-detour hold add foo --reason r > add.txt
-          grep -qx 'recorded foo 1.0 on x86_64-linux' add.txt
+          grep -q '^recorded foo 1.0 on x86_64-linux (with the inputs of [0-9a-f]\{12\})$' add.txt
           test "$(jq -c .foo.worked held-packages.json)" = '{"version":"1.0","outPaths":{"x86_64-linux":"/nix/store/aaaa-foo-1.0"}}'
           nix-detour hold list | grep -q '^foo  *a @1.0  '
           nix-detour hold verify > v1.txt
           grep -qx 'same foo x86_64-linux' v1.txt
-          if grep -q fixed v1.txt; then echo "a fix is not compared with the last working build" >&2; exit 1; fi
           nix-detour hold refresh foo
           test "$(jq -r '.foo.worked.outPaths."x86_64-linux"' held-packages.json)" = /nix/store/bbbb-foo-1.0
           nix-detour hold verify > v2.txt
@@ -940,6 +953,15 @@ in
           nix-detour hold add bar --from stable --reason r 2>/dev/null
           test "$(jq -r .bar.from held-packages.json)" = stable
           test "$(jq -r '.bar | has("worked")' held-packages.json)" = false
+          # A revision hold whose evaluation fails is added without `worked`.
+          nix-detour hold add baz --from c --reason r 2>err.txt
+          test "$(jq -c .baz.from held-packages.json)" = '{"rev":"c","narHash":"sha256-c"}'
+          test "$(jq -r '.baz | has("worked")' held-packages.json)" = false
+          grep -q 'not recorded' err.txt
+          # A recorded hold the release checks don't have is unchecked, and verify fails.
+          jq '.gone = {from: {rev: "a", narHash: "x"}, worked: {outPaths: {"x86_64-linux": "/nix/store/g"}}}' held-packages.json > h && mv h held-packages.json
+          if nix-detour hold verify > v3.txt; then echo "verify should fail on an unchecked hold" >&2; exit 1; fi
+          grep -q '^unchecked x86_64-linux gone is recorded in held-packages.json' v3.txt
         )
 
         touch $out
