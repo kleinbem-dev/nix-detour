@@ -194,12 +194,25 @@ holds() {
   fi
 }
 
-# Writes the holds from stdin with sorted top-level keys; leaves $file intact on error.
-write_holds() {
-  local new
-  new=$(jq --indent 2 'to_entries | sort_by(.key) | from_entries') && [[ -n $new ]] \
-    || die "cannot update $file (is it valid JSON?)"
-  printf '%s\n' "$new" >"$file"
+# Applies a jq filter to the holds file under a lock (like prs.sh) and
+# replaces it in one move (mode as a plain write; mktemp's 0600 would hide it
+# from other readers); returns 1 if the filter or the write fails.
+update_holds() {
+  local lockdir="$file.lock" waited=0 new tmp="" status=0
+  while ! mkdir "$lockdir" 2>/dev/null; do
+    ((++waited <= 200)) || { echo "nix-detour: timed out waiting for $lockdir" >&2; return 1; }
+    sleep 0.05
+  done
+  if new=$(holds | jq "$@" 2>/dev/null | jq --indent 2 'to_entries | sort_by(.key) | from_entries') \
+    && [[ -n $new ]] && tmp=$(mktemp "$file.XXXXXX") \
+    && chmod "$(printf '%o' $((0666 & ~$(umask))))" "$tmp" && printf '%s\n' "$new" >"$tmp" && mv "$tmp" "$file"; then
+    :
+  else
+    status=1
+    [[ -z $tmp ]] || rm -f "$tmp"
+  fi
+  rmdir "$lockdir" 2>/dev/null || true
+  return "$status"
 }
 
 # Formats holds from stdin; jq handles date parsing so BSD/macOS date works and
@@ -286,7 +299,8 @@ if $all_release; then
   fi
   found=false
   if [[ -f $file ]] && jq -e --arg n "$name" 'has($n)' <<<"$holds_data" >/dev/null; then
-    jq --arg n "$name" 'del(.[$n])' <<<"$holds_data" | write_holds
+    # shellcheck disable=SC2016  # jq program
+    update_holds --arg n "$name" 'del(.[$n])' || die "cannot update $file (is it valid JSON?)"
     echo "released hold $name"
     found=true
   fi
@@ -366,24 +380,6 @@ previous_nixpkgs() {
   die "no earlier nixpkgs in the default branch's history of $lock"
 }
 
-# Applies a jq filter to the holds file under a lock (like prs.sh) and
-# replaces it in one move; returns 1 if the filter or the write fails.
-update_holds() {
-  local lockdir="$file.lock" waited=0 new tmp="" status=0
-  while ! mkdir "$lockdir" 2>/dev/null; do
-    ((++waited <= 200)) || { echo "nix-detour: timed out waiting for $lockdir" >&2; return 1; }
-    sleep 0.05
-  done
-  if new=$(holds | jq "$@" 2>/dev/null | jq --indent 2 'to_entries | sort_by(.key) | from_entries') \
-    && [[ -n $new ]] && tmp=$(mktemp "$file.XXXXXX") && printf '%s\n' "$new" >"$tmp" && mv "$tmp" "$file"; then
-    :
-  else
-    status=1
-    [[ -z $tmp ]] || rm -f "$tmp"
-  fi
-  rmdir "$lockdir" 2>/dev/null || true
-  return "$status"
-}
 
 # Adds `worked` (worked.sh record WHICH NIX_ARGS) to NAME's entry, BASIS saying
 # what it was evaluated on. Fails with a warning when the flake can't tell, or
@@ -453,7 +449,8 @@ case "$command" in
         source=$(jq -n --arg rev "$from" --arg h "$hash" '{rev: $rev, narHash: $h}')
         ;;
     esac
-    holds | jq --arg n "$name" --argjson from "$source" --arg since "$(date -u +%F)" \
+    # shellcheck disable=SC2016  # jq program
+    update_holds --arg n "$name" --argjson from "$source" --arg since "$(date -u +%F)" \
       --arg reason "$reason" --arg link "$link" --arg rw "$release_when" --arg uv "$until_version" --arg tests "$tests" \
       --argjson patches "$patches_json" --arg override "$override" '
       .[$n] = ({from: $from, since: $since}
@@ -463,7 +460,7 @@ case "$command" in
         + (if $uv == "" then {} else {untilVersion: $uv} end)
         + {reason: $reason}
         + (if $link == "" then {} else {link: $link} end)
-        + (if $tests == "" then {} else {tests: ($tests | split(","))} end))' | write_holds
+        + (if $tests == "" then {} else {tests: ($tests | split(","))} end))' || die "cannot update $file (is it valid JSON?)"
     src_label=$(jq -r --arg n "$name" '.[$n].from | if type == "string" then . else .rev end' "$file")
     if [[ $patches_json != '[]' || -n $override ]]; then
       echo "fixing $name on $src_label"
@@ -503,7 +500,8 @@ case "$command" in
     valid_name "$name"
     holds_data=$(holds)
     jq -e --arg n "$name" 'has($n)' <<<"$holds_data" >/dev/null || die "$name is not held"
-    jq --arg n "$name" 'del(.[$n])' <<<"$holds_data" | write_holds
+    # shellcheck disable=SC2016  # jq program
+    update_holds --arg n "$name" 'del(.[$n])' || die "cannot update $file (is it valid JSON?)"
     echo "released $name"
     ;;
   list)

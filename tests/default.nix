@@ -998,6 +998,17 @@ in
           jq '.gone = {from: {rev: "a", narHash: "x"}, worked: {outPaths: {"x86_64-linux": "/nix/store/g"}}}' held-packages.json > h && mv h held-packages.json
           if nix-detour hold verify > v3.txt; then echo "verify should fail on an unchecked hold" >&2; exit 1; fi
           grep -q '^unchecked x86_64-linux gone is recorded in held-packages.json' v3.txt
+          # A name with a space stays one name.
+          jq '."two words" = .gone' held-packages.json > h && mv h held-packages.json
+          nix-detour hold verify > v4.txt || true
+          grep -q '^unchecked x86_64-linux two words is recorded' v4.txt
+          # A build recorded for a system the flake doesn't check: unchecked too.
+          jq 'del(.gone, ."two words") | .arm = {from: {rev: "a", narHash: "x"}, worked: {outPaths: {"aarch64-linux": "/nix/store/a"}}}' held-packages.json > h && mv h held-packages.json
+          if nix-detour hold verify > v5.txt; then echo "verify should fail on an unchecked system" >&2; exit 1; fi
+          grep -qx 'unchecked aarch64-linux has recorded builds but no release checks' v5.txt
+          # Locked writes keep a plain write's mode.
+          nix-detour hold remove arm
+          test "$(stat -c %a held-packages.json)" = "$(printf '%o' $((0666 & ~$(umask))))"
         )
 
         touch $out
