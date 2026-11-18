@@ -141,6 +141,32 @@ Both compare the package set your `releaseChecks` get, not a host's: pass them
 the overlays and build-changing config (such as `cudaSupport`) your hosts use,
 or `same` can hold for a build the host doesn't run.
 
+### Holding what a host ran
+
+Lock history only knows what built. A package that builds but broke at
+runtime needs the build a host actually ran, from its system generations:
+
+```sh
+nix-detour hold history open-webui --host core-pi   # where to hold it from
+nix-detour hold add open-webui --from generation --host core-pi --reason "…"
+nix-detour hold add open-webui --from generation:412 --reason "…"   # this machine
+```
+
+`--from generation` takes the newest generation on an older nixpkgs than the
+newest one; `generation:N` picks one (`generation:comin-65` for a host that
+comin deploys: its generations live in `system-profiles/comin`). It looks up the store path that
+generation ran, then the nixpkgs that builds exactly that path: the
+generation's own nixpkgs first, then your lock history (`--lock` can point at
+the lock of the flake your hosts are built from). The generation's nixpkgs
+alone isn't enough: a package that was already held, or came from an
+overlay, came from somewhere else. If no nixpkgs builds that path, it says so
+instead of guessing. `--host` reads the generations over one `ssh` call.
+
+`hold history NAME` lists NAME on each nixpkgs of the lock history (version,
+broken, or which substituter has the build) and in each system generation,
+and marks the held revision. For a held package it evaluates your flake's
+release checks, so your overlays count; otherwise plain nixpkgs.
+
 Recording needs the flake to export `releaseChecks` from a nix-detour with
 this feature; otherwise `hold add` says so and adds the hold without it.
 In a git flake, a new holds file must be `git add`ed first, or the flake

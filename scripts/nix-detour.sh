@@ -12,6 +12,8 @@ prs_cli="@prs@"
 [[ $prs_cli == @*@ ]] && prs_cli="$here/prs.sh"
 worked_cli="@worked@"
 [[ $worked_cli == @*@ ]] && worked_cli="$here/worked.sh"
+generations_sh="@generations@"
+[[ $generations_sh == @*@ ]] && generations_sh="$here/generations.sh"
 web_server_bin="@webServer@"
 if [[ $web_server_bin == @*@ ]]; then
   web_server=(python3 "$here/../web/server.py")
@@ -32,6 +34,11 @@ Usage: nix-detour hold <command> [options]
       flake.lock had before its last change to that input, from the history
       of the default branch (origin/HEAD, else HEAD; first parents only), so
       only a lock that was merged there counts.
+      --from generation[:N] [--host HOST] takes the nixpkgs a system
+      generation ran (default: the newest one on an older nixpkgs than the
+      newest generation), here or on HOST over ssh: for a package that
+      builds but broke at runtime. It says whether the hold builds what that
+      generation ran.
       A hold on a nixpkgs revision records the build that last worked
       (`worked`: version and store path per system), from the flake's
       releaseChecks on that revision; --no-record skips it.
@@ -50,6 +57,10 @@ Usage: nix-detour hold <command> [options]
       means your overlays or config changed the held package.
   refresh NAME [--flake REF]
       Record the held package as it builds now, after such a change on purpose.
+  history NAME [--host HOST] [--limit N]
+      NAME across the default branch's lock history (version, broken or
+      which substituter has it) and the system generations here or on HOST:
+      where to hold it from.
   check [PATH] [--flake REF] [--channel REF]
       Build what ends each hold (the flake's releaseChecks, with the holds
       its mkHolds reads) from the newest nixpkgs; say which holds can go.
@@ -110,6 +121,7 @@ esac
 file=held-packages.json prs_file=nixpkgs-prs.json lock=flake.lock input=nixpkgs
 file_explicit=false lock_explicit=false flake_explicit=false channel_explicit=false
 from=previous reason="" link="" release_when="" until_version="" tests="" record=true
+host="" limit=""
 flake=. channel=github:NixOS/nixpkgs/nixos-unstable override=""
 args=() patches=()
 $fix && from=current
@@ -130,6 +142,13 @@ while (($#)); do
     --until-version) need "$@"; until_version="$2"; shift 2 ;;
     --tests) need "$@"; tests="$2"; shift 2 ;;
     --no-record) record=false; shift ;;
+    --host) need "$@"; host="$2"; shift 2 ;;
+    --limit)
+      need "$@"
+      [[ $2 =~ ^[1-9][0-9]*$ ]] || die "--limit needs a positive number"
+      limit="$2"
+      shift 2
+      ;;
     --patch) need "$@"; patches+=("$2"); shift 2 ;;
     --override) need "$@"; override="$2"; shift 2 ;;
     --flake) need "$@"; flake="$2"; flake_explicit=true; shift 2 ;;
@@ -381,6 +400,70 @@ previous_nixpkgs() {
 }
 
 
+# generations.sh for NAME: this machine's system generations, or HOST's
+# (one ssh call, so one key prompt).
+generations() {
+  if [[ -n $host ]]; then
+    ssh "$host" bash -s -- "$1" "${limit:-30}" <"$generations_sh"
+  else
+    bash "$generations_sh" "$1" "${limit:-30}"
+  fi
+}
+
+# The substituter that has PATH, if any.
+cached_in() {
+  local s
+  for s in $(nix config show substituters 2>/dev/null); do
+    if nix path-info --store "$s" "$1" >/dev/null 2>&1; then
+      echo "${s#*://}"
+      return 0
+    fi
+  done
+  return 1
+}
+
+# NAME on nixpkgs REV [for SYSTEM], as {version, out} (out null: broken) or {missing}: a
+# held one as the flake's release checks build it (with your overlays, like
+# `worked`), else plain nixpkgs.
+package_at() {
+  local name="$1" rev="$2" system="${3:-}" info describe
+  [[ -n $system && $system != - ]] || system=$(nix eval --raw --impure --expr builtins.currentSystem)
+  # outs: every output, as a generation may hold only some (jq-1.8.2, not -bin).
+  # shellcheck disable=SC2016  # Nix expression
+  describe='let o = builtins.tryEval p.outPath; os = builtins.tryEval (map (n: p.${n}.outPath) (p.outputs or [ "out" ])); in { version = p.version or null; out = if o.success then o.value else null; outs = if os.success then os.value else [ ]; }'
+  if holds | jq -e --arg n "$name" 'has($n)' >/dev/null \
+    && info=$(nix eval --json "$flake#releaseChecks.$system" \
+      --override-input "$input" "github:NixOS/nixpkgs/$rev" \
+      --apply "c: let p = (c.\"$name\" or { }).nixHoldsPackage or null; in if p == null then null else $describe" 2>/dev/null) \
+    && [[ $info != null ]]; then
+    echo "$info"
+  else
+    nix eval --json "github:NixOS/nixpkgs/$rev#legacyPackages.$system.$name" --apply "p: $describe" 2>/dev/null \
+      || echo '{"version":null,"out":null,"missing":true}'
+  fi
+}
+
+# The nixpkgs that builds what a system generation ran: the generation's own
+# nixpkgs first, then the lock history. A package can come from elsewhere
+# (a hold, an overlay, another flake), so the store path decides, not the
+# generation's nixpkgs.
+generation_nixpkgs() {
+  local name="$1" gen_rev="$2" system="$3" paths="$4" rev out tried=0
+  declare -A seen=()
+  for rev in "$gen_rev" $(lock_history 2>/dev/null | awk '{print $3}'); do
+    [[ -n $rev && $rev != - && -z ${seen[$rev]:-} ]] || continue
+    seen[$rev]=1
+    out=$(package_at "$name" "$rev" "$system" | jq -r '.outs // [] | .[]')
+    if [[ -n $out ]] && grep -qxF -f <(tr ' ' '\n' <<<"$paths" | grep .) <<<"$out"; then
+      echo "$rev"
+      return 0
+    fi
+    tried=$((tried + 1))
+    ((tried < ${limit:-15})) || break
+  done
+  return 1
+}
+
 # Adds `worked` (worked.sh record WHICH NIX_ARGS) to NAME's entry, BASIS saying
 # what it was evaluated on. Fails with a warning when the flake can't tell, or
 # when the entry changed meanwhile (removed, or another source).
@@ -443,6 +526,26 @@ case "$command" in
         previous_commit=$(jq -r .commit <<<"$source")
         source=$(jq -c 'del(.commit)' <<<"$source")
         ;;
+      generation | generation:*)
+        lines=$(generations "$name") || die "cannot read the system generations${host:+ of $host}"
+        [[ -n $lines ]] || die "no system generations${host:+ on $host}"
+        if [[ $from == generation:* ]]; then
+          gen=$(awk -v n="${from#generation:}" '$1 == n' <<<"$lines")
+          [[ -n $gen ]] || die "no generation ${from#generation:}${host:+ on $host} among the newest ${limit:-30} (see --limit)"
+        else
+          newest=$(tail -1 <<<"$lines" | awk '{print $3}')
+          gen=$(awk -v r="$newest" '$3 != r && $3 != "-"' <<<"$lines" | tail -1)
+          [[ -n $gen ]] || die "every generation${host:+ on $host} has nixpkgs ${newest:0:12}: pass --from generation:N"
+        fi
+        read -r gen_number _ gen_rev gen_system gen_paths <<<"$gen"
+        [[ -n ${gen_paths// /} ]] || die "generation $gen_number${host:+ on $host} has no store path of $name"
+        echo "generation $gen_number${host:+ on $host} ran $gen_paths" >&2
+        rev=$(generation_nixpkgs "$name" "$gen_rev" "$gen_system" "$gen_paths") \
+          || die "no nixpkgs in the generation or the lock history (${limit:-15} tried) builds what it ran: an overlay or another flake changes it; pick one with nix-detour hold history $name and pass --from REV"
+        hash=$(nix flake prefetch --json "github:NixOS/nixpkgs/$rev" | jq -er .hash) \
+          || die "cannot fetch nixpkgs $rev"
+        source=$(jq -n --arg rev "$rev" --arg h "$hash" '{rev: $rev, narHash: $h}')
+        ;;
       *)
         hash=$(nix flake prefetch --json "github:NixOS/nixpkgs/$from" | jq -er .hash) \
           || die "cannot fetch nixpkgs $from"
@@ -482,6 +585,27 @@ case "$command" in
             --override-input "$input" "github:NixOS/nixpkgs/$rev" || true
         fi
       fi
+      if [[ -n ${gen_number:-} ]]; then
+        # The host's own overlays or config can make what it ran differ from
+        # what the holds flake builds; verify can't see that, so say it here.
+        # Every output of the held build on the generation's system.
+        outs=$(nix eval --json "$flake#releaseChecks.$gen_system" --apply "c: let p = (c.\"$name\" or { }).nixHoldsHeld or null; in
+          if p == null then [ ] else map (n: p.\${n}.outPath) (p.outputs or [ \"out\" ])" 2>/dev/null | jq -r '.[]') || outs=
+        [[ -n $outs ]] || outs=$(jq -r --arg n "$name" --arg s "$gen_system" '.[$n].worked.outPaths[$s] // empty' "$file")
+        if [[ -z ${gen_paths// /} ]]; then
+          echo "generation $gen_number${host:+ on $host} has no store path of $name"
+        else
+          for path in $gen_paths; do
+            if [[ -z $outs ]]; then
+              echo "generation $gen_number${host:+ on $host} ran $path"
+            elif grep -qxF -- "$path" <<<"$outs"; then
+              echo "generation $gen_number${host:+ on $host} ran $path: the hold builds the same"
+            else
+              echo "generation $gen_number${host:+ on $host} ran $path, the hold builds $(paste -sd' ' <<<"$outs"): that host's overlays or config change it"
+            fi
+          done
+        fi
+      fi
     fi
     ;;
   refresh)
@@ -493,6 +617,65 @@ case "$command" in
     ;;
   verify)
     "$worked_cli" verify "$flake" "$file"
+    ;;
+  history)
+    name="${args[1]:-}"
+    [[ -n $name ]] || die "history needs the name of the package"
+    valid_name "$name"
+    command -v nix >/dev/null 2>&1 || die "history needs nix"
+    held_rev=$(holds | jq -r --arg n "$name" '.[$n].from.rev? // empty')
+    in_holds=$(holds | jq --arg n "$name" 'has($n)')
+    mark() { [[ -n $held_rev && $1 == "$held_rev" ]] && echo "  <- held" || true; }
+    gen_lines=$(generations "$name" 2>/dev/null) || gen_lines=
+    [[ -z $host || -n $gen_lines ]] || die "cannot read the system generations of $host"
+    # Another host's lock rows are for its system: that is the build it would run.
+    system=$(awk 'NR == 1 && $4 != "-" { print $4 }' <<<"$gen_lines")
+    [[ -n $host && -n $system ]] || system=$(nix eval --raw --impure --expr builtins.currentSystem)
+    if $in_holds; then
+      echo "$name in the nixpkgs of $lock ($system, newest first; as $flake's release checks build it):"
+    else
+      echo "$name in the nixpkgs of $lock ($system, newest first; plain nixpkgs, without your overlays):"
+    fi
+    revs=()
+    if current=$(locked_nixpkgs <"$lock"); then revs+=("current $(jq -r .rev <<<"$current")"); fi
+    if history=$(lock_history); then
+      while read -r _ date rev _; do
+        [[ -z $rev ]] || revs+=("$date $rev")
+      done <<<"$history"
+    fi
+    declare -A seen=()
+    shown=0
+    for entry in "${revs[@]}"; do
+      read -r date rev <<<"$entry"
+      [[ -z ${seen[$rev]:-} ]] || continue
+      seen[$rev]=1
+      info=$(package_at "$name" "$rev" "$system")
+      version=$(jq -r '.version // "-"' <<<"$info")
+      out=$(jq -r '.out // empty' <<<"$info")
+      if jq -e .missing <<<"$info" >/dev/null 2>&1; then
+        state="not in this nixpkgs"
+      elif [[ -z $out ]]; then
+        state="broken"
+      elif where=$(cached_in "$out"); then
+        state="built ($where)"
+      else
+        state="in no substituter"
+      fi
+      printf '  %-10s %-12s %-16s %s%s\n' "$date" "${rev:0:12}" "$version" "$state" "$(mark "$rev")"
+      shown=$((shown + 1))
+      ((shown < ${limit:-8})) || break
+    done
+    ((shown)) || echo "  (no nixpkgs $input in $lock)"
+    if [[ -n $gen_lines ]]; then
+      echo
+      echo "$name in the system generations${host:+ of $host} (newest first):"
+      last="${name##*.}"
+      sort -k2,2nr <<<"$gen_lines" | while read -r gen t rev _ paths; do
+        day=$(jq -nr --argjson t "$t" '$t | strftime("%F")')
+        versions=$(for p in $paths; do echo "${p##*-"$last"-}"; done | sort -u | paste -sd' ')
+        printf '  %-9s %-10s %-12s %s%s\n' "$gen" "$day" "${rev:0:12}" "${versions:-(not in this generation)}" "$(mark "$rev")"
+      done
+    fi
     ;;
   remove)
     name="${args[1]:-}"
