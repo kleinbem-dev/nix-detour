@@ -35,6 +35,24 @@ let
     };
   };
 
+  verifyHolds = mkHolds {
+    inherit nixpkgs-stable;
+    holds = {
+      hello = {
+        from = "stable";
+        worked.outPaths.${system} = verifyHeld.hello.outPath;
+      };
+      figlet = {
+        from = "stable";
+        worked.outPaths.${system} = "/nix/store/recorded-figlet";
+      };
+      cowsay.from = "stable";
+      # A fix: unfree and never evaluated, as verify leaves fixes out.
+      unrar.from = "current";
+    };
+  };
+  verifyHeld = pkgs.extend verifyHolds.overlay;
+
   missingRelease = mkHolds {
     inherit nixpkgs-stable;
     holds = {
@@ -218,6 +236,24 @@ let
     testReleaseCheckHeld = {
       expr = (holds.releaseChecks pkgs).hello.nixHoldsHeld.outPath;
       expected = held.hello.outPath;
+    };
+    # What `hold verify` reads: fixes left out, recorded and current builds.
+    testVerify = {
+      expr = import ../scripts/verify.nix system (verifyHolds.releaseChecks pkgs);
+      expected = {
+        hello = {
+          worked = verifyHeld.hello.outPath;
+          now = verifyHeld.hello.outPath;
+        };
+        figlet = {
+          worked = "/nix/store/recorded-figlet";
+          now = verifyHeld.figlet.outPath;
+        };
+        cowsay = {
+          worked = null;
+          now = verifyHeld.cowsay.outPath;
+        };
+      };
     };
     testReleaseChecksSkipMissing = {
       expr = builtins.attrNames (holds.releaseChecks pkgs);
@@ -923,7 +959,7 @@ in
           *"--reference-lock-file"*'nixHoldsPackage'*)
             echo '{"out":"/nix/store/aaaa-foo-1.0","version":"1.0"}' ;;
           *'"foo" or { }).nixHoldsHeld'*) echo '{"out":"/nix/store/bbbb-foo-1.0","version":"1.0"}' ;;
-          *"#releaseChecks.x86_64-linux --apply"*'filterAttrs'*)
+          *"#releaseChecks.x86_64-linux --apply"*'removeAttrs checks fixes'*)
             jq -c --arg w "$(jq -r '.foo.worked.outPaths."x86_64-linux" // empty' held-packages.json)" '{
               foo: {worked: (if $w == "" then null else $w end), now: "/nix/store/aaaa-foo-1.0"}}' <<< null ;;
           *) exit 1 ;;

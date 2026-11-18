@@ -27,6 +27,8 @@ die() {
 }
 
 read -ra nix_args <<<"${NIX_DETOUR_ARGS:-}"
+verify_nix="@verify_nix@"
+[[ $verify_nix == @*@ ]] && verify_nix="$(dirname "${BASH_SOURCE[0]}")/verify.nix"
 systems() {
   nix eval "${nix_args[@]}" "${@:2}" --json "$1#releaseChecks" --apply builtins.attrNames 2>/dev/null | jq -r '.[]'
 }
@@ -62,23 +64,15 @@ case "${1:-}" in
   verify)
     (($# >= 2)) || die "verify needs FLAKE"
     flake="$2" holds="${3:-}"
+    verify_expr=$(<"$verify_nix") || die "cannot read $verify_nix"
     found=false incomplete=false
     err=$(mktemp) || exit 1
     trap 'rm -f "$err"' EXIT
     while read -r system; do
       [[ -n $system ]] || continue
       found=true
-      # Fixes are meant to differ from the last working build: left out
-      # before their held package is evaluated.
-      # shellcheck disable=SC2016  # Nix expression
-      if ! got=$(nix eval "${nix_args[@]}" --json "$flake#releaseChecks.$system" --apply "checks:
-        builtins.mapAttrs (_: c:
-          let held = builtins.tryEval (c.nixHoldsHeld.outPath or null); in {
-            worked = c.nixHolds.worked.outPaths.\"$system\" or null;
-            now = if held.success then held.value else null;
-          }) (builtins.filterAttrs (_: c:
-            let e = c.nixHolds or { }; in
-            (e.from or null) != \"current\" && (e.patches or [ ]) == [ ] && !(e ? override)) checks)" 2>"$err"); then
+      if ! got=$(nix eval "${nix_args[@]}" --json "$flake#releaseChecks.$system" \
+        --apply "($verify_expr) \"$system\"" 2>"$err"); then
         echo "unchecked $system $(tail -1 "$err")"
         incomplete=true
         continue

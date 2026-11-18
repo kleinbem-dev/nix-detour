@@ -78,6 +78,9 @@ stdenvNoCC.mkDerivation (finalAttrs: {
     install -Dm755 scripts/release-check.sh "$out/libexec/nix-detour/release-check"
     install -Dm755 scripts/prs.sh "$out/libexec/nix-detour/prs"
     install -Dm755 scripts/worked.sh "$out/libexec/nix-detour/worked"
+    install -Dm644 scripts/verify.nix "$out/share/nix-detour/verify.nix"
+    substituteInPlace "$out/libexec/nix-detour/worked" \
+      --replace-fail "@verify_nix@" "$out/share/nix-detour/verify.nix"
     install -Dm755 web/server.py "$out/libexec/nix-detour/server.py"
     install -Dm755 scripts/nix-detour.sh "$out/bin/nix-detour"
 
