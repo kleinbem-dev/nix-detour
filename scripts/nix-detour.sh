@@ -10,6 +10,8 @@ release_check="@releaseCheck@"
 [[ $release_check == @*@ ]] && release_check="$here/release-check.sh"
 prs_cli="@prs@"
 [[ $prs_cli == @*@ ]] && prs_cli="$here/prs.sh"
+worked_cli="@worked@"
+[[ $worked_cli == @*@ ]] && worked_cli="$here/worked.sh"
 web_server_bin="@webServer@"
 if [[ $web_server_bin == @*@ ]]; then
   web_server=(python3 "$here/../web/server.py")
@@ -25,9 +27,14 @@ Usage: nix-detour hold <command> [options]
 
   add NAME --reason TEXT [--link URL] [--from previous|stable|current|REV]
            [--patch URL|FILE]... [--override FILE] [--release-when ATTR]
-           [--until-version VERSION] [--tests a,b]
+           [--until-version VERSION] [--tests a,b] [--no-record]
       Hold NAME. --from previous (the default) takes the nixpkgs your
-      flake.lock had before its last change to that input, from git history.
+      flake.lock had before its last change to that input, from the history
+      of the default branch (origin/HEAD, else HEAD; first parents only), so
+      only a lock that was merged there counts.
+      A hold on a nixpkgs revision records the build that last worked
+      (`worked`: version and store path per system), from the flake's
+      releaseChecks on that revision; --no-record skips it.
       --patch and --override fix the package on top: a patch URL is pinned
       by its hash, a FILE is relative to the holds file's directory, and
       --override FILE holds `{ pkgs, package }: <the fixed package>`.
@@ -38,6 +45,11 @@ Usage: nix-detour hold <command> [options]
       Drop the hold of NAME.
   list [PATH]
       Show every hold, where it comes from and how old it is.
+  verify [PATH] [--flake REF]
+      Check that each recorded hold still builds what last worked: "differs"
+      means your overlays or config changed the held package.
+  refresh NAME [--flake REF]
+      Record the held package as it builds now, after such a change on purpose.
   check [PATH] [--flake REF] [--channel REF]
       Build what ends each hold (the flake's releaseChecks, with the holds
       its mkHolds reads) from the newest nixpkgs; say which holds can go.
@@ -97,7 +109,7 @@ esac
 
 file=held-packages.json prs_file=nixpkgs-prs.json lock=flake.lock input=nixpkgs
 file_explicit=false lock_explicit=false flake_explicit=false channel_explicit=false
-from=previous reason="" link="" release_when="" until_version="" tests=""
+from=previous reason="" link="" release_when="" until_version="" tests="" record=true
 flake=. channel=github:NixOS/nixpkgs/nixos-unstable override=""
 args=() patches=()
 $fix && from=current
@@ -117,6 +129,7 @@ while (($#)); do
     --release-when) need "$@"; release_when="$2"; shift 2 ;;
     --until-version) need "$@"; until_version="$2"; shift 2 ;;
     --tests) need "$@"; tests="$2"; shift 2 ;;
+    --no-record) record=false; shift ;;
     --patch) need "$@"; patches+=("$2"); shift 2 ;;
     --override) need "$@"; override="$2"; shift 2 ;;
     --flake) need "$@"; flake="$2"; flake_explicit=true; shift 2 ;;
@@ -168,7 +181,7 @@ fi
 
 if ($all_list || $all_check) && [[ -n ${args[0]:-} ]]; then
   resolve_target "${args[0]}"
-elif ! $all_release && [[ ${args[0]:-} == "list" || ${args[0]:-} == "check" ]] && [[ -n ${args[1]:-} ]]; then
+elif ! $all_release && [[ ${args[0]:-} == "list" || ${args[0]:-} == "check" || ${args[0]:-} == "verify" ]] && [[ -n ${args[1]:-} ]]; then
   resolve_target "${args[1]}"
 fi
 
@@ -199,7 +212,8 @@ print_holds() {
     | select(($fix | not) or (.value.patches // []) != [] or .value.override != null or .value.from == "current")
     | .key as $name
     | ((.value.from | if type == "string" then . else .rev[0:12] end)
-        + (if (.value.patches // []) != [] or .value.override then "+fix" else "" end)) as $src
+        + (if (.value.patches // []) != [] or .value.override then "+fix" else "" end)
+        + (if .value.worked.version then " @\(.value.worked.version)" else "" end)) as $src
     | (.value.since // "") as $since
     | (if $since == "" then "no date"
        else (try ($since | strptime("%Y-%m-%d") | mktime) catch null) as $ts
@@ -219,6 +233,9 @@ if $all_check; then
   if [[ -f $file ]]; then
     echo "=== Holds ==="
     "$release_check" "$flake" "$channel" || failed=true
+    echo ""
+    echo "=== Last working builds ==="
+    "$worked_cli" verify "$flake" || failed=true
     ran=true
   fi
   if [[ -f $prs_file ]]; then
@@ -297,20 +314,42 @@ locked_nixpkgs() {
     | {rev, narHash}' 2>/dev/null
 }
 
+# The newest nixpkgs of the default branch's lock history that isn't the
+# current one: a lock merged there passed the consumer's checks, one on a
+# branch may not have.
 previous_nixpkgs() {
   if ! git rev-parse --git-dir >/dev/null 2>&1; then
     die "--from previous reads flake.lock's git history; pass --from REV or stable instead"
   fi
-  local current commit locked
+  local current commit locked branch
   current=$(locked_nixpkgs <"$lock" | jq -r .rev) || die "no input $input in $lock"
+  branch=$(git rev-parse --abbrev-ref origin/HEAD 2>/dev/null) || branch=HEAD
   while read -r commit; do
     locked=$(git show "$commit:./$lock" 2>/dev/null | locked_nixpkgs) || continue
     if [[ $(jq -r .rev <<<"$locked") != "$current" ]]; then
       echo "$locked"
       return
     fi
-  done < <(git log --format=%H -- "$lock")
-  die "no earlier nixpkgs in the history of $lock"
+  done < <(git log --first-parent --format=%H "$branch" -- "$lock")
+  die "no earlier nixpkgs in the history of $lock on $branch"
+}
+
+# Adds `worked` (worked.sh record WHICH) to NAME's entry; fails with a
+# warning when the flake can't tell.
+record_worked() {
+  local name="$1" which="$2" worked
+  shift 2
+  if ! command -v nix >/dev/null 2>&1; then
+    echo "nix-detour: no nix, so the last working build of $name is not recorded" >&2
+    return 1
+  fi
+  worked=$("$worked_cli" record "$flake" "$name" "$which" "$@") || worked=""
+  if [[ -z $worked ]]; then
+    echo "nix-detour: the last working build of $name is not recorded: $flake has no release check for it (does its mkHolds read $file?)" >&2
+    return 1
+  fi
+  holds | jq --arg n "$name" --argjson w "$worked" '.[$n].worked = $w' | write_holds
+  echo "recorded $name $(jq -r '.version // "(no version)"' <<<"$worked") on $(jq -r '.outPaths | keys | join(", ")' <<<"$worked")"
 }
 
 case "$command" in
@@ -360,7 +399,20 @@ case "$command" in
       echo "fixing $name on $src_label"
     else
       echo "holding $name from $src_label"
+      if $record && jq -e 'type == "object"' <<<"$source" >/dev/null; then
+        record_worked "$name" package --override-input "$input" "github:NixOS/nixpkgs/$(jq -r .rev <<<"$source")" || true
+      fi
     fi
+    ;;
+  refresh)
+    name="${args[1]:-}"
+    [[ -n $name ]] || die "refresh needs the name of the package"
+    valid_name "$name"
+    holds | jq -e --arg n "$name" 'has($n)' >/dev/null || die "$name is not held"
+    record_worked "$name" held || exit 1
+    ;;
+  verify)
+    "$worked_cli" verify "$flake"
     ;;
   remove)
     name="${args[1]:-}"

@@ -210,6 +210,15 @@ let
         releaseWhen = "python3Packages.jq";
       };
     };
+    # What `worked` records (without the hold) and what verify compares (with it).
+    testReleaseCheckPackage = {
+      expr = (holds.releaseChecks pkgs).figlet.nixHoldsPackage.outPath;
+      expected = pkgs.figlet.outPath;
+    };
+    testReleaseCheckHeld = {
+      expr = (holds.releaseChecks pkgs).hello.nixHoldsHeld.outPath;
+      expected = held.hello.outPath;
+    };
     testReleaseChecksSkipMissing = {
       expr = builtins.attrNames (holds.releaseChecks pkgs);
       expected = [
@@ -282,6 +291,10 @@ let
     testNestedReleaseCheck = {
       expr = (holds.releaseChecks pkgs)."gnomeExtensions.arcmenu".outPath;
       expected = pkgs.gnomeExtensions.arcmenu.outPath;
+    };
+    testNestedReleaseCheckHeld = {
+      expr = (holds.releaseChecks pkgs)."gnomeExtensions.arcmenu".nixHoldsHeld.outPath;
+      expected = held.gnomeExtensions.arcmenu.outPath;
     };
     testReleaseChecksMissingReleaseWhen = {
       expr = (missingRelease.releaseChecks pkgs).hello.nixHolds.releaseWhen;
@@ -866,6 +879,67 @@ in
           cd nogit
           echo '{}' > flake.lock
           if nix-detour hold add p --reason r 2>/dev/null; then echo "previous outside git repo should fail" >&2; exit 1; fi
+        )
+
+        # --from previous reads the default branch: not a lock committed only
+        # on this branch, which never passed the checks there.
+        git init -q --bare branch_origin
+        mkdir -p branch_repo && (
+          cd branch_repo
+          git init -q -b main .
+          git remote add origin ../branch_origin
+          lock a; git add flake.lock; git commit -qm a
+          git push -q origin main
+          git remote set-head origin main
+          git checkout -q -b update
+          lock x; git commit -qam x
+          lock b
+          nix-detour hold add foo --reason r --no-record
+          test "$(jq -r .foo.from.rev held-packages.json)" = a
+        )
+
+        # worked: recorded from releaseChecks on the previous nixpkgs, verified
+        # against the held package now, refreshed on request.
+        mkdir -p mocknix
+        cat << 'EOF' > mocknix/nix
+        #!${pkgs.runtimeShell}
+        case "$*" in
+          *"#releaseChecks --apply builtins.attrNames"*) echo '["x86_64-linux"]' ;;
+          *"--override-input nixpkgs github:NixOS/nixpkgs/a"*'nixHoldsPackage'*)
+            echo '{"out":"/nix/store/aaaa-foo-1.0","version":"1.0"}' ;;
+          *'"foo" or { }).nixHoldsHeld'*) echo '{"out":"/nix/store/bbbb-foo-1.0","version":"1.0"}' ;;
+          *"#releaseChecks.x86_64-linux --apply"*'mapAttrs'*)
+            jq -c --arg w "$(jq -r '.foo.worked.outPaths."x86_64-linux" // empty' held-packages.json)" '{
+              foo: {plain: true, worked: (if $w == "" then null else $w end), now: "/nix/store/aaaa-foo-1.0"},
+              fixed: {plain: false, worked: null, now: "/nix/store/cccc"}}' <<< null ;;
+          *) exit 1 ;;
+        esac
+        EOF
+        chmod +x mocknix/nix
+        mkdir -p worked_repo && (
+          cd worked_repo
+          export PATH="$TMPDIR/mocknix:$PATH"
+          git init -q .
+          lock a; git add flake.lock; git commit -qm a
+          lock b
+          nix-detour hold verify > v0.txt
+          grep -qx 'unrecorded foo x86_64-linux' v0.txt
+          nix-detour hold add foo --reason r > add.txt
+          grep -qx 'recorded foo 1.0 on x86_64-linux' add.txt
+          test "$(jq -c .foo.worked held-packages.json)" = '{"version":"1.0","outPaths":{"x86_64-linux":"/nix/store/aaaa-foo-1.0"}}'
+          nix-detour hold list | grep -q '^foo  *a @1.0  '
+          nix-detour hold verify > v1.txt
+          grep -qx 'same foo x86_64-linux' v1.txt
+          if grep -q fixed v1.txt; then echo "a fix is not compared with the last working build" >&2; exit 1; fi
+          nix-detour hold refresh foo
+          test "$(jq -r '.foo.worked.outPaths."x86_64-linux"' held-packages.json)" = /nix/store/bbbb-foo-1.0
+          nix-detour hold verify > v2.txt
+          grep -qx 'differs foo x86_64-linux /nix/store/bbbb-foo-1.0 /nix/store/aaaa-foo-1.0' v2.txt
+          if nix-detour hold refresh missing 2>/dev/null; then echo "refresh of a missing hold should fail" >&2; exit 1; fi
+          # Without a release check for it, the hold is still added.
+          nix-detour hold add bar --from stable --reason r 2>/dev/null
+          test "$(jq -r .bar.from held-packages.json)" = stable
+          test "$(jq -r '.bar | has("worked")' held-packages.json)" = false
         )
 
         touch $out

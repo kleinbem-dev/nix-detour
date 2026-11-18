@@ -73,11 +73,15 @@ if [[ ${MODE:-} == commit && -z $holds_repo ]]; then
   fi
   export EXPECTED_HEAD
 fi
+# The flake whose releaseChecks read HOLDS: where a new hold records the
+# build that last worked.
+holds_flake="$FLAKE"
 if [[ -n $holds_repo ]]; then
   # Cloned by clone-holds.sh, which also points every check at the clone.
   clone="${NIX_DETOUR_HOLDS_CLONE:?run clone-holds.sh first}"
   holds_file="$HOLDS"
   [[ -z $holds_file ]] || HOLDS="$clone/$holds_file"
+  holds_flake="$clone"
 fi
 
 held=() failed=() unchecked=() unverified=()
@@ -115,7 +119,7 @@ for n in 1 2 3 4 5 6; do
     break
   fi
   for name in "${new[@]}"; do
-    "${cli[@]}" hold add --file "$HOLDS" --from "$previous" \
+    "${cli[@]}" hold add --file "$HOLDS" --flake "$holds_flake" --from "$previous" \
       --reason "Broken by the lock update: $(reason "$name")" -- "$name"
     held+=("$name")
   done

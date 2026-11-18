@@ -77,6 +77,7 @@ stdenvNoCC.mkDerivation (finalAttrs: {
 
     install -Dm755 scripts/release-check.sh "$out/libexec/nix-detour/release-check"
     install -Dm755 scripts/prs.sh "$out/libexec/nix-detour/prs"
+    install -Dm755 scripts/worked.sh "$out/libexec/nix-detour/worked"
     install -Dm755 web/server.py "$out/libexec/nix-detour/server.py"
     install -Dm755 scripts/nix-detour.sh "$out/bin/nix-detour"
 
@@ -84,9 +85,18 @@ stdenvNoCC.mkDerivation (finalAttrs: {
       --replace-fail "@version@" "${finalAttrs.version}" \
       --replace-fail "@releaseCheck@" "$out/libexec/nix-detour/release-check" \
       --replace-fail "@prs@" "$out/libexec/nix-detour/prs" \
+      --replace-fail "@worked@" "$out/libexec/nix-detour/worked" \
       --replace-fail "@webServer@" "$out/libexec/nix-detour/web-server"
 
     wrapProgram "$out/libexec/nix-detour/release-check" \
+      --prefix PATH : "${
+        lib.makeBinPath [
+          coreutils
+          jq
+        ]
+      }"
+
+    wrapProgram "$out/libexec/nix-detour/worked" \
       --prefix PATH : "${
         lib.makeBinPath [
           coreutils
