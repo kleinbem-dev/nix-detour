@@ -59,9 +59,14 @@ let
       check =
         name:
         let
-          held = try pkgs.${name}.drvPath;
-          heldName = tryName pkgs.${name};
-          plainName = if plain ? ${name} then tryName plain.${name} else { success = false; };
+          path = lib.splitString "." name;
+          held = try (lib.getAttrFromPath path pkgs).drvPath;
+          heldName = tryName (lib.getAttrFromPath path pkgs);
+          plainName =
+            if lib.hasAttrByPath path plain then
+              tryName (lib.getAttrFromPath path plain)
+            else
+              { success = false; };
           wanted = map (r: r.value) (
             lib.filter (r: r.success) [
               heldName
@@ -75,7 +80,7 @@ let
           lib.filter (drv: drv != held.value && lib.elem (bare drv) wanted) closure;
     in
     lib.filterAttrs (_: drvs: drvs != [ ]) (
-      lib.genAttrs (lib.filter (name: pkgs ? ${name}) names) check
+      lib.genAttrs (lib.filter (name: lib.hasAttrByPath (lib.splitString "." name) pkgs) names) check
     );
 in
 {

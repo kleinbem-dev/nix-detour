@@ -108,16 +108,29 @@ in
 # Names come from the top level only (`prev ? top`): looking inside a set to
 # decide the overlay's names would recurse. A package inside a set replaces
 # only its own attribute, if the set has it; the rest of the set stays.
+# Shallow names go first, so a hold inside a held set lands on that set.
 lib.mapAttrs
   (
     top: names:
     if names == [ top ] then
       held top
     else
-      lib.updateManyAttrsByPath (map (name: {
-        path = lib.tail (path name);
-        update = _: held name;
-      }) (lib.filter (name: lib.hasAttrByPath (path name) prev) names)) prev.${top}
+      lib.foldl'
+        (
+          set: name:
+          lib.updateManyAttrsByPath [
+            {
+              path = lib.tail (path name);
+              update = _: held name;
+            }
+          ] set
+        )
+        prev.${top}
+        (
+          lib.sort (a: b: lib.length (path a) < lib.length (path b)) (
+            lib.filter (name: lib.hasAttrByPath (path name) prev) names
+          )
+        )
   )
   (
     lib.groupBy (name: lib.head (path name)) (
