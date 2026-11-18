@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.5.0 (2026-11-18)
 
 - `hold add --from generation[:N] [--host HOST]` holds what a system
   generation ran, here or over ssh: it finds the nixpkgs (the generation's,
