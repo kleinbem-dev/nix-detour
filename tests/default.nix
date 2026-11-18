@@ -1020,13 +1020,16 @@ in
           mkdir -p "gen$n/sw/bin"
           printf '#!%s\necho {\\"nixpkgsRevision\\":\\"%s\\"}\n' "${pkgs.runtimeShell}" "$rev" > "gen$n/sw/bin/nixos-version"
           chmod +x "gen$n/sw/bin/nixos-version"
-          echo "/nix/store/xxxx-glibc-2.40 /nix/store/$rev$rev$rev$rev-foo-$v" | tr ' ' '\n' > "gen$n/closure"
+          # foo-bar is another package: found as a candidate, never reported as foo.
+          echo "/nix/store/xxxx-glibc-2.40 /nix/store/zzzz-foo-bar-9 /nix/store/$rev$rev$rev$rev-foo-$v" | tr ' ' '\n' > "gen$n/closure"
         done
         ln -s "$PWD/gen1" profiles/system-5-link
         ln -s "$PWD/gen2" profiles/system-profiles/comin-2-link
         ln -s comin-2-link profiles/system-profiles/comin
         touch -h -d 2026-01-01 profiles/system-5-link
         touch -h -d 2026-01-02 profiles/system-profiles/comin-2-link
+        # The same system on every builder: generations.sh asks uname.
+        printf '#!%s\ncase $1 in -m) echo x86_64 ;; -s) echo Linux ;; esac\n' "${pkgs.runtimeShell}" > mockgen/uname
         cat << 'EOF' > mockgen/nix-store
         #!${pkgs.runtimeShell}
         cat "$2/closure"
@@ -1049,7 +1052,7 @@ in
           *) exit 1 ;;
         esac
         EOF
-        chmod +x mockgen/nix mockgen/nix-store
+        chmod +x mockgen/nix mockgen/nix-store mockgen/uname
         mkdir -p gen_repo && (
           cd gen_repo
           export PATH="$TMPDIR/mockgen:$PATH" NIX_DETOUR_PROFILES="$TMPDIR/profiles"
@@ -1058,7 +1061,7 @@ in
           lock b
           # The newest generation on an older nixpkgs than comin-2: 5.
           nix-detour hold add foo --from generation --reason r > add.txt 2> add.err
-          grep -qx 'generation 5 ran /nix/store/aaaa-foo-1.0' add.err
+          grep -qx 'generation 5 has /nix/store/zzzz-foo-bar-9 /nix/store/aaaa-foo-1.0' add.err
           test "$(jq -c .foo.from held-packages.json)" = '{"rev":"a","narHash":"sha256-a"}'
           grep -qx 'recorded foo 1.0 on x86_64-linux (nixpkgs a, other inputs as they are now)' add.txt
           grep -qx 'generation 5 ran /nix/store/aaaa-foo-1.0: the hold builds the same' add.txt

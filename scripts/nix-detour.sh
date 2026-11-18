@@ -413,12 +413,13 @@ generations() {
 # The substituter that has PATH, if any.
 cached_in() {
   local s
-  for s in $(nix config show substituters 2>/dev/null); do
+  while IFS= read -r s; do
+    [[ -n $s ]] || continue
     if nix path-info --store "$s" "$1" >/dev/null 2>&1; then
       echo "${s#*://}"
       return 0
     fi
-  done
+  done < <(nix config show substituters 2>/dev/null | tr ' ' '\n')
   return 1
 }
 
@@ -430,7 +431,7 @@ package_at() {
   [[ -n $system && $system != - ]] || system=$(nix eval --raw --impure --expr builtins.currentSystem)
   # outs: every output, as a generation may hold only some (jq-1.8.2, not -bin).
   # shellcheck disable=SC2016  # Nix expression
-  describe='let o = builtins.tryEval p.outPath; os = builtins.tryEval (map (n: p.${n}.outPath) (p.outputs or [ "out" ])); in { version = p.version or null; out = if o.success then o.value else null; outs = if os.success then os.value else [ ]; }'
+  describe='let o = builtins.tryEval p.outPath; os = builtins.tryEval (let l = map (n: p.${n}.outPath) (p.outputs or [ "out" ]); in builtins.deepSeq l l); in { version = p.version or null; out = if o.success then o.value else null; outs = if os.success then os.value else [ ]; }'
   if holds | jq -e --arg n "$name" 'has($n)' >/dev/null \
     && info=$(nix eval --json "$flake#releaseChecks.$system" \
       --override-input "$input" "github:NixOS/nixpkgs/$rev" \
@@ -448,9 +449,10 @@ package_at() {
 # (a hold, an overlay, another flake), so the store path decides, not the
 # generation's nixpkgs.
 generation_nixpkgs() {
-  local name="$1" gen_rev="$2" system="$3" paths="$4" rev out tried=0
+  local name="$1" gen_rev="$2" system="$3" paths="$4" rev out tried=0 revs
   declare -A seen=()
-  for rev in "$gen_rev" $(lock_history 2>/dev/null | awk '{print $3}'); do
+  mapfile -t revs < <(echo "$gen_rev"; lock_history 2>/dev/null | awk '{print $3}')
+  for rev in "${revs[@]}"; do
     [[ -n $rev && $rev != - && -z ${seen[$rev]:-} ]] || continue
     seen[$rev]=1
     out=$(package_at "$name" "$rev" "$system" | jq -r '.outs // [] | .[]')
@@ -539,7 +541,7 @@ case "$command" in
         fi
         read -r gen_number _ gen_rev gen_system gen_paths <<<"$gen"
         [[ -n ${gen_paths// /} ]] || die "generation $gen_number${host:+ on $host} has no store path of $name"
-        echo "generation $gen_number${host:+ on $host} ran $gen_paths" >&2
+        echo "generation $gen_number${host:+ on $host} has $gen_paths" >&2
         rev=$(generation_nixpkgs "$name" "$gen_rev" "$gen_system" "$gen_paths") \
           || die "no nixpkgs in the generation or the lock history (${limit:-15} tried) builds what it ran: an overlay or another flake changes it; pick one with nix-detour hold history $name and pass --from REV"
         hash=$(nix flake prefetch --json "github:NixOS/nixpkgs/$rev" | jq -er .hash) \
@@ -592,18 +594,18 @@ case "$command" in
         outs=$(nix eval --json "$flake#releaseChecks.$gen_system" --apply "c: let p = (c.\"$name\" or { }).nixHoldsHeld or null; in
           if p == null then [ ] else map (n: p.\${n}.outPath) (p.outputs or [ \"out\" ])" 2>/dev/null | jq -r '.[]') || outs=
         [[ -n $outs ]] || outs=$(jq -r --arg n "$name" --arg s "$gen_system" '.[$n].worked.outPaths[$s] // empty' "$file")
-        if [[ -z ${gen_paths// /} ]]; then
-          echo "generation $gen_number${host:+ on $host} has no store path of $name"
+        # Candidates are broad (any path named like NAME): report what the hold builds.
+        read -ra gen_path_list <<<"$gen_paths"
+        same=()
+        for path in "${gen_path_list[@]}"; do
+          ! grep -qxF -- "$path" <<<"$outs" || same+=("$path")
+        done
+        if [[ -z $outs ]]; then
+          echo "generation $gen_number${host:+ on $host} ran ${gen_path_list[*]}"
+        elif ((${#same[@]})); then
+          echo "generation $gen_number${host:+ on $host} ran ${same[*]}: the hold builds the same"
         else
-          for path in $gen_paths; do
-            if [[ -z $outs ]]; then
-              echo "generation $gen_number${host:+ on $host} ran $path"
-            elif grep -qxF -- "$path" <<<"$outs"; then
-              echo "generation $gen_number${host:+ on $host} ran $path: the hold builds the same"
-            else
-              echo "generation $gen_number${host:+ on $host} ran $path, the hold builds $(paste -sd' ' <<<"$outs"): that host's overlays or config change it"
-            fi
-          done
+          echo "generation $gen_number${host:+ on $host} ran ${gen_path_list[*]}, the hold builds $(paste -sd' ' <<<"$outs"): that host's overlays or config change it"
         fi
       fi
     fi
@@ -672,7 +674,13 @@ case "$command" in
       last="${name##*.}"
       sort -k2,2nr <<<"$gen_lines" | while read -r gen t rev _ paths; do
         day=$(jq -nr --argjson t "$t" '$t | strftime("%F")')
-        versions=$(for p in $paths; do echo "${p##*-"$last"-}"; done | sort -u | paste -sd' ')
+        read -ra path_list <<<"$paths"
+        # Only version-like names: foo-bar-9 is another package, not foo.
+        versions=$(for p in "${path_list[@]}"; do
+          v="${p##*-"$last"-}"
+          case $v in [0-9]* | unstable-*) echo "$v" ;; esac
+        done \
+          | sed -E 's/-(bin|dev|lib|out|man|doc|devdoc|info|debug|static|python|data)$//' | sort -u | paste -sd' ')
         printf '  %-9s %-10s %-12s %s%s\n' "$gen" "$day" "${rev:0:12}" "${versions:-(not in this generation)}" "$(mark "$rev")"
       done
     fi
