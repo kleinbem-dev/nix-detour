@@ -44,6 +44,11 @@ An example of it in use:
 The overlay replaces each held package with the one from its `from` nixpkgs.
 Packages a consumer's package set doesn't have are left out.
 
+A name can be a package inside a set, such as
+`home-assistant-custom-components.auth_oidc`: the overlay replaces only that
+attribute, and the rest of the set stays. This doesn't reach Python package
+sets: `python3Packages.foo` changes that attribute, not `python3.pkgs`.
+
 ## Using it
 
 Keep your holds in your own repo, in a `held-packages.json` as above:

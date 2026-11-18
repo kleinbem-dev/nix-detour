@@ -36,7 +36,11 @@
           }:
           let
             entries = if builtins.isAttrs holds then holds else lib.importJSON holds;
-            heldIn = pkgs: builtins.filter (name: pkgs ? ${name}) (builtins.attrNames entries);
+            heldIn =
+              pkgs:
+              builtins.filter (name: lib.hasAttrByPath (lib.splitString "." name) pkgs) (
+                builtins.attrNames entries
+              );
           in
           {
             overlay = import ./overlay.nix {

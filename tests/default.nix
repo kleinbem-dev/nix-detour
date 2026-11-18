@@ -26,6 +26,8 @@ let
       unrar.from = "stable";
       own-package.from = "stable";
       not-in-nixpkgs.from = "stable";
+      "gnomeExtensions.arcmenu".from = "stable";
+      "gnomeExtensions.not-in-nixpkgs".from = "stable";
       figlet = {
         from = "stable";
         releaseWhen = "python3Packages.jq";
@@ -212,9 +214,27 @@ let
       expr = builtins.attrNames (holds.releaseChecks pkgs);
       expected = [
         "figlet"
+        "gnomeExtensions.arcmenu"
         "hello"
         "unrar"
       ];
+    };
+    # A package inside a set is held on its own; its siblings stay current.
+    testNestedHeld = {
+      expr = {
+        held = held.gnomeExtensions.arcmenu.outPath;
+        sibling = held.gnomeExtensions.dash-to-dock.outPath;
+        missing = held.gnomeExtensions ? not-in-nixpkgs;
+      };
+      expected = {
+        held = stable.gnomeExtensions.arcmenu.outPath;
+        sibling = pkgs.gnomeExtensions.dash-to-dock.outPath;
+        missing = false;
+      };
+    };
+    testNestedReleaseCheck = {
+      expr = (holds.releaseChecks pkgs)."gnomeExtensions.arcmenu".outPath;
+      expected = pkgs.gnomeExtensions.arcmenu.outPath;
     };
     testReleaseChecksMissingReleaseWhen = {
       expr = (missingRelease.releaseChecks pkgs).hello.nixHolds.releaseWhen;
@@ -541,6 +561,19 @@ let
       expected = [
         stable.figlet.version
         true
+      ];
+    };
+    # The override reuses figlet.nix: it only marks the package.
+    testFixNested = {
+      expr = [
+        fixedPkgs.gnomeExtensions.arcmenu.version
+        (fixedPkgs.gnomeExtensions.arcmenu ? fixedWith)
+        (fixedPkgs.gnomeExtensions.dash-to-dock ? fixedWith)
+      ];
+      expected = [
+        pkgs.gnomeExtensions.arcmenu.version
+        true
+        false
       ];
     };
     testFixRelativeNeedsFile = {
