@@ -81,6 +81,8 @@ stdenvNoCC.mkDerivation (finalAttrs: {
     install -Dm644 scripts/verify.nix "$out/share/nix-detour/verify.nix"
     substituteInPlace "$out/libexec/nix-detour/worked" \
       --replace-fail "@verify_nix@" "$out/share/nix-detour/verify.nix"
+    # Read by bash, here or through ssh on another host: not wrapped.
+    install -Dm644 scripts/generations.sh "$out/share/nix-detour/generations.sh"
     install -Dm755 web/server.py "$out/libexec/nix-detour/server.py"
     install -Dm755 scripts/nix-detour.sh "$out/bin/nix-detour"
 
@@ -89,6 +91,7 @@ stdenvNoCC.mkDerivation (finalAttrs: {
       --replace-fail "@releaseCheck@" "$out/libexec/nix-detour/release-check" \
       --replace-fail "@prs@" "$out/libexec/nix-detour/prs" \
       --replace-fail "@worked@" "$out/libexec/nix-detour/worked" \
+      --replace-fail "@generations@" "$out/share/nix-detour/generations.sh" \
       --replace-fail "@webServer@" "$out/libexec/nix-detour/web-server"
 
     wrapProgram "$out/libexec/nix-detour/release-check" \

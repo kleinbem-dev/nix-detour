@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- `hold add --from generation[:N] [--host HOST]` holds what a system
+  generation ran, here or over ssh: it finds the nixpkgs (the generation's,
+  then the lock history) that builds exactly the store path the generation
+  had, for packages that build but broke at runtime. `hold history NAME` shows
+  NAME across the lock history (version, broken, cached where) and the system
+  generations. `--lock` may name another repository's lock.
 - Holds and fixes take packages inside a package set, such as
   `home-assistant-custom-components.auth_oidc`: the overlay replaces only that
   attribute of the set. Before, such an entry was skipped without a word.
