@@ -51,6 +51,23 @@ runs:
         echo "stale=$stale" >> "$GITHUB_OUTPUT"
         echo "held=$held" >> "$GITHUB_OUTPUT"
 
+    - name: Check that each hold still builds what last worked
+      shell: bash
+      env:
+        FLAKE: ${{ inputs.flake }}
+        HOLDS: ${{ inputs.holds-file }}
+      run: |
+        set -uo pipefail
+        # Only warnings (GitHub's bash runs with -e): a hold that can go still gets its PR.
+        "$GITHUB_ACTION_PATH/../scripts/worked.sh" verify "$FLAKE" "$HOLDS" > "$RUNNER_TEMP/worked.txt" || true
+        while read -r kind a b c d; do
+          case $kind in
+            differs) echo "::warning::$a on $b is not the build that last worked ($c, now $d): an overlay or config changes it. If that is on purpose: nix-detour hold refresh $a" ;;
+            unrecorded) echo "$a on $b: no last working build recorded" ;;
+            unchecked) echo "::warning::last working builds not checked on $a: $b $c $d" ;;
+          esac
+        done < "$RUNNER_TEMP/worked.txt"
+
     - name: Open a PR per hold that can go
       if: inputs.open-prs == 'true'
       shell: bash

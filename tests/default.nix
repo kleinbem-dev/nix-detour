@@ -35,6 +35,24 @@ let
     };
   };
 
+  verifyHolds = mkHolds {
+    inherit nixpkgs-stable;
+    holds = {
+      hello = {
+        from = "stable";
+        worked.outPaths.${system} = verifyHeld.hello.outPath;
+      };
+      figlet = {
+        from = "stable";
+        worked.outPaths.${system} = "/nix/store/recorded-figlet";
+      };
+      cowsay.from = "stable";
+      # A fix: unfree and never evaluated, as verify leaves fixes out.
+      unrar.from = "current";
+    };
+  };
+  verifyHeld = pkgs.extend verifyHolds.overlay;
+
   missingRelease = mkHolds {
     inherit nixpkgs-stable;
     holds = {
@@ -210,6 +228,33 @@ let
         releaseWhen = "python3Packages.jq";
       };
     };
+    # What `worked` records (without the hold) and what verify compares (with it).
+    testReleaseCheckPackage = {
+      expr = (holds.releaseChecks pkgs).figlet.nixHoldsPackage.outPath;
+      expected = pkgs.figlet.outPath;
+    };
+    testReleaseCheckHeld = {
+      expr = (holds.releaseChecks pkgs).hello.nixHoldsHeld.outPath;
+      expected = held.hello.outPath;
+    };
+    # What `hold verify` reads: fixes left out, recorded and current builds.
+    testVerify = {
+      expr = import ../scripts/verify.nix system (verifyHolds.releaseChecks pkgs);
+      expected = {
+        hello = {
+          worked = verifyHeld.hello.outPath;
+          now = verifyHeld.hello.outPath;
+        };
+        figlet = {
+          worked = "/nix/store/recorded-figlet";
+          now = verifyHeld.figlet.outPath;
+        };
+        cowsay = {
+          worked = null;
+          now = verifyHeld.cowsay.outPath;
+        };
+      };
+    };
     testReleaseChecksSkipMissing = {
       expr = builtins.attrNames (holds.releaseChecks pkgs);
       expected = [
@@ -282,6 +327,10 @@ let
     testNestedReleaseCheck = {
       expr = (holds.releaseChecks pkgs)."gnomeExtensions.arcmenu".outPath;
       expected = pkgs.gnomeExtensions.arcmenu.outPath;
+    };
+    testNestedReleaseCheckHeld = {
+      expr = (holds.releaseChecks pkgs)."gnomeExtensions.arcmenu".nixHoldsHeld.outPath;
+      expected = held.gnomeExtensions.arcmenu.outPath;
     };
     testReleaseChecksMissingReleaseWhen = {
       expr = (missingRelease.releaseChecks pkgs).hello.nixHolds.releaseWhen;
@@ -866,6 +915,100 @@ in
           cd nogit
           echo '{}' > flake.lock
           if nix-detour hold add p --reason r 2>/dev/null; then echo "previous outside git repo should fail" >&2; exit 1; fi
+        )
+
+        # --from previous reads the default branch: not a lock committed only
+        # on this branch, which never passed the checks there.
+        git init -q --bare branch_origin
+        mkdir -p branch_repo && (
+          cd branch_repo
+          git init -q -b main .
+          git remote add origin ../branch_origin
+          lock a; git add flake.lock; git commit -qm a
+          git push -q origin main
+          git remote set-head origin main
+          git checkout -q -b update
+          lock x; git commit -qam x
+          lock b
+          nix-detour hold add foo --reason r --no-record
+          test "$(jq -r .foo.from.rev held-packages.json)" = a
+          # Without origin/HEAD, origin/main.
+          git remote set-head origin -d
+          nix-detour hold add foo2 --reason r --no-record
+          test "$(jq -r .foo2.from.rev held-packages.json)" = a
+        )
+        # An origin without a known default branch: no guessing from HEAD.
+        mkdir -p nodefault_repo && (
+          cd nodefault_repo
+          git init -q -b feature .
+          git remote add origin ../branch_origin
+          lock a; git add flake.lock; git commit -qm a
+          lock b
+          if nix-detour hold add foo --reason r 2>err.txt; then echo "an unknown default branch should fail" >&2; exit 1; fi
+          grep -q "default branch" err.txt
+        )
+
+        # worked: recorded from releaseChecks on the previous nixpkgs, verified
+        # against the held package now, refreshed on request.
+        mkdir -p mocknix
+        cat << 'EOF' > mocknix/nix
+        #!${pkgs.runtimeShell}
+        case "$*" in
+          *"#releaseChecks --apply builtins.attrNames"*) echo '["x86_64-linux"]' ;;
+          "flake prefetch"*) echo '{"hash":"sha256-c"}' ;;
+          *"--reference-lock-file"*'nixHoldsPackage'*)
+            echo '{"out":"/nix/store/aaaa-foo-1.0","version":"1.0"}' ;;
+          *'"foo" or { }).nixHoldsHeld'*) echo '{"out":"/nix/store/bbbb-foo-1.0","version":"1.0"}' ;;
+          *"#releaseChecks.x86_64-linux --apply"*'removeAttrs checks fixes'*)
+            jq -c --arg w "$(jq -r '.foo.worked.outPaths."x86_64-linux" // empty' held-packages.json)" '{
+              foo: {worked: (if $w == "" then null else $w end), now: "/nix/store/aaaa-foo-1.0"}}' <<< null ;;
+          *) exit 1 ;;
+        esac
+        EOF
+        chmod +x mocknix/nix
+        mkdir -p worked_repo && (
+          cd worked_repo
+          export PATH="$TMPDIR/mocknix:$PATH"
+          git init -q .
+          lock a; git add flake.lock; git commit -qm a
+          lock b
+          nix-detour hold verify > v0.txt
+          grep -qx 'unrecorded foo x86_64-linux' v0.txt
+          nix-detour hold add foo --reason r > add.txt
+          grep -q '^recorded foo 1.0 on x86_64-linux (with the inputs of [0-9a-f]\{12\})$' add.txt
+          test "$(jq -c .foo.worked held-packages.json)" = '{"version":"1.0","outPaths":{"x86_64-linux":"/nix/store/aaaa-foo-1.0"}}'
+          nix-detour hold list | grep -q '^foo  *a @1.0  '
+          nix-detour hold verify > v1.txt
+          grep -qx 'same foo x86_64-linux' v1.txt
+          nix-detour hold refresh foo
+          test "$(jq -r '.foo.worked.outPaths."x86_64-linux"' held-packages.json)" = /nix/store/bbbb-foo-1.0
+          nix-detour hold verify > v2.txt
+          grep -qx 'differs foo x86_64-linux /nix/store/bbbb-foo-1.0 /nix/store/aaaa-foo-1.0' v2.txt
+          if nix-detour hold refresh missing 2>/dev/null; then echo "refresh of a missing hold should fail" >&2; exit 1; fi
+          # Without a release check for it, the hold is still added.
+          nix-detour hold add bar --from stable --reason r 2>/dev/null
+          test "$(jq -r .bar.from held-packages.json)" = stable
+          test "$(jq -r '.bar | has("worked")' held-packages.json)" = false
+          # A revision hold whose evaluation fails is added without `worked`.
+          nix-detour hold add baz --from c --reason r 2>err.txt
+          test "$(jq -c .baz.from held-packages.json)" = '{"rev":"c","narHash":"sha256-c"}'
+          test "$(jq -r '.baz | has("worked")' held-packages.json)" = false
+          grep -q 'not recorded' err.txt
+          # A recorded hold the release checks don't have is unchecked, and verify fails.
+          jq '.gone = {from: {rev: "a", narHash: "x"}, worked: {outPaths: {"x86_64-linux": "/nix/store/g"}}}' held-packages.json > h && mv h held-packages.json
+          if nix-detour hold verify > v3.txt; then echo "verify should fail on an unchecked hold" >&2; exit 1; fi
+          grep -q '^unchecked x86_64-linux gone is recorded in held-packages.json' v3.txt
+          # A name with a space stays one name.
+          jq '."two words" = .gone' held-packages.json > h && mv h held-packages.json
+          nix-detour hold verify > v4.txt || true
+          grep -q '^unchecked x86_64-linux two words is recorded' v4.txt
+          # A build recorded for a system the flake doesn't check: unchecked too.
+          jq 'del(.gone, ."two words") | .arm = {from: {rev: "a", narHash: "x"}, worked: {outPaths: {"aarch64-linux": "/nix/store/a"}}}' held-packages.json > h && mv h held-packages.json
+          if nix-detour hold verify > v5.txt; then echo "verify should fail on an unchecked system" >&2; exit 1; fi
+          grep -qx 'unchecked aarch64-linux has recorded builds but no release checks' v5.txt
+          # Locked writes keep a plain write's mode.
+          nix-detour hold remove arm
+          test "$(stat -c %a held-packages.json)" = "$(printf '%o' $((0666 & ~$(umask))))"
         )
 
         touch $out

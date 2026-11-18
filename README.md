@@ -40,6 +40,7 @@ An example of it in use:
 | `untilVersion` | optional: delay release until the upstream package version is at least this version |
 | `reason`, `link` | why, and the upstream issue or PR that fixes it |
 | `tests` | optional: the `nixosTests` to run with the hold (default: `nixosTests.<name>`, if nixpkgs has it; `[]` for none) |
+| `worked` | set by the CLI: the build that last worked, `{ version, outPaths: { <system>: <path> } }`, see [The last working build](#the-last-working-build) |
 
 The overlay replaces each held package with the one from its `from` nixpkgs.
 Packages a consumer's package set doesn't have are left out.
@@ -104,10 +105,46 @@ nix run github:kleinbem-dev/nix-detour -- hold check     # which holds can go
 ```
 
 `hold add` holds a package on the nixpkgs your `flake.lock` had before its last
-nixpkgs update, read from git history: the usual case right after an update
-broke it. `--from stable` or `--from <rev>` choose another. `--until-version` delays
+nixpkgs update, read from the default branch's history (first parents of
+`origin/HEAD`, else `origin/main` or `origin/master`; `HEAD` only in a
+repository without an `origin` remote): the usual case right after an update
+broke it. A lock only committed on your branch doesn't count, since it never
+passed your checks. `--from stable` or `--from <rev>` choose another. `--until-version` delays
 release until upstream has reached at least that version. `hold remove` drops a
 hold, and `hold check` runs the release checks locally.
+
+### The last working build
+
+A hold should run the build that worked before the update, not just "the
+package from an older nixpkgs". `hold add` on a nixpkgs revision records that
+build in the entry as `worked`: the package without the hold, from your
+flake's `releaseChecks`, with its version and store path per system. With
+`--from previous` it evaluates your flake with all its inputs as they were
+before the update (`--reference-lock-file`), so an overlay input that moved in
+the same update doesn't change the result. With `--from REV` only nixpkgs is
+set back, and the CLI says so. `hold list` shows the version.
+
+```sh
+nix-detour hold verify    # same / differs / unrecorded, per hold and system
+nix-detour hold refresh X # accept X's held build as it is now
+```
+
+`verify` compares each recorded hold with the held package now. `differs`
+means the hold no longer builds what worked: an overlay or config setting
+changes the held package, so it is an untested build (and likely not in your
+cache). If you changed it on purpose, `hold refresh` records the new build.
+`nix-detour check` and the hold-release action run `verify` too; the action
+reports `differs` as a warning. Fixes are left out, since they are meant to
+differ.
+
+Both compare the package set your `releaseChecks` get, not a host's: pass them
+the overlays and build-changing config (such as `cudaSupport`) your hosts use,
+or `same` can hold for a build the host doesn't run.
+
+Recording needs the flake to export `releaseChecks` from a nix-detour with
+this feature; otherwise `hold add` says so and adds the hold without it.
+In a git flake, a new holds file must be `git add`ed first, or the flake
+doesn't see it. `--no-record` skips recording.
 
 Top-level `nix-detour list` and `nix-detour check` inspect both holds and PRs
 in one shot. `nix-detour release <name>` automatically finds whether `<name>` is a

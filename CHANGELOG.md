@@ -5,7 +5,16 @@
 - Holds and fixes take packages inside a package set, such as
   `home-assistant-custom-components.auth_oidc`: the overlay replaces only that
   attribute of the set. Before, such an entry was skipped without a word.
-
+- Holds know their last working build: `hold add` on a nixpkgs revision
+  records `worked` (version and store path per system, from the flake's
+  `releaseChecks` on that revision), `hold verify` says whether each hold still
+  builds it, `hold refresh` accepts a changed build. `nix-detour check` and the
+  hold-release action run the verification. releaseChecks entries carry
+  `nixHoldsPackage` and `nixHoldsHeld` for it.
+- `hold add --from previous` reads the default branch's lock history
+  (first parents of `origin/HEAD`, `origin/main` or `origin/master`; `HEAD`
+  only without an `origin` remote), so a lock committed only on a branch is
+  never taken as the last working one.
 - PR entries take packages inside a package set, such as
   `gnomeExtensions.arcmenu`: the overlay replaces only that attribute of the
   set. They need their file in `paths`; `pr add <number>` takes it from the

@@ -41,13 +41,14 @@
               builtins.filter (name: lib.hasAttrByPath (lib.splitString "." name) pkgs) (
                 builtins.attrNames entries
               );
-          in
-          {
             overlay = import ./overlay.nix {
               inherit nixpkgs-stable extraOverlays config;
               holds = entries;
               root = if builtins.isAttrs holds then null else dirOf holds;
             };
+          in
+          {
+            inherit overlay;
 
             # NixOS tests of the held packages (`tests`, default nixosTests.<name>):
             # the module is from the current nixpkgs and the package from its hold,
@@ -62,8 +63,14 @@
             # Per hold, its `releaseWhen` (default: the package) from a set without
             # the holds; the hold can go once this builds on the newest nixpkgs.
             # `nixHolds` carries the entry, so the tools read the holds in use.
+            # `nixHoldsPackage` is the package without its hold, `nixHoldsHeld`
+            # with it: the CLI records the first on the last working nixpkgs
+            # (`worked`) and checks that the second still is that build.
             releaseChecks =
               pkgs:
+              let
+                heldPkgs = pkgs.extend overlay;
+              in
               lib.genAttrs (heldIn pkgs) (
                 name:
                 let
@@ -79,6 +86,8 @@
                 (if pkg != null && versionSatisfied then pkg else { })
                 // {
                   nixHolds = entry;
+                  nixHoldsPackage = lib.getAttrFromPath (lib.splitString "." name) pkgs;
+                  nixHoldsHeld = lib.getAttrFromPath (lib.splitString "." name) heldPkgs;
                 }
               );
           };
