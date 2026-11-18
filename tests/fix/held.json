@@ -8,5 +8,10 @@
     "from": "stable",
     "override": "figlet.nix",
     "reason": "test"
+  },
+  "gnomeExtensions.arcmenu": {
+    "from": "current",
+    "override": "figlet.nix",
+    "reason": "test"
   }
 }

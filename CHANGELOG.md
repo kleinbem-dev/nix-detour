@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Holds and fixes take packages inside a package set, such as
+  `home-assistant-custom-components.auth_oidc`: the overlay replaces only that
+  attribute of the set. Before, such an entry was skipped without a word.
+
 - PR entries take packages inside a package set, such as
   `gnomeExtensions.arcmenu`: the overlay replaces only that attribute of the
   set. They need their file in `paths`; `pr add <number>` takes it from the

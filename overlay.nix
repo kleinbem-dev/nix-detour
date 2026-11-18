@@ -95,10 +95,45 @@ let
     else
       patched;
 
+  # `home-assistant-custom-components.auth_oidc` is a package inside a set.
+  path = name: lib.splitString "." name;
   base =
     name: entry:
-    if entry.from == "current" then prev.${name} else packageSets.${key entry.from}.${name};
+    lib.getAttrFromPath (path name) (
+      if entry.from == "current" then prev else packageSets.${key entry.from}
+    );
+
+  held = name: fixed holds.${name} (base name holds.${name});
 in
-lib.mapAttrs (name: entry: fixed entry (base name entry)) (
-  lib.filterAttrs (name: _: prev ? ${name}) holds
-)
+# Names come from the top level only (`prev ? top`): looking inside a set to
+# decide the overlay's names would recurse. A package inside a set replaces
+# only its own attribute, if the set has it; the rest of the set stays.
+# Shallow names go first, so a hold inside a held set lands on that set.
+lib.mapAttrs
+  (
+    top: names:
+    if names == [ top ] then
+      held top
+    else
+      lib.foldl'
+        (
+          set: name:
+          lib.updateManyAttrsByPath [
+            {
+              path = lib.tail (path name);
+              update = _: held name;
+            }
+          ] set
+        )
+        prev.${top}
+        (
+          lib.sort (a: b: lib.length (path a) < lib.length (path b)) (
+            lib.filter (name: lib.hasAttrByPath (path name) prev) names
+          )
+        )
+  )
+  (
+    lib.groupBy (name: lib.head (path name)) (
+      lib.filter (name: prev ? ${lib.head (path name)}) (lib.attrNames holds)
+    )
+  )

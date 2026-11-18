@@ -26,6 +26,8 @@ let
       unrar.from = "stable";
       own-package.from = "stable";
       not-in-nixpkgs.from = "stable";
+      "gnomeExtensions.arcmenu".from = "stable";
+      "gnomeExtensions.not-in-nixpkgs".from = "stable";
       figlet = {
         from = "stable";
         releaseWhen = "python3Packages.jq";
@@ -212,9 +214,74 @@ let
       expr = builtins.attrNames (holds.releaseChecks pkgs);
       expected = [
         "figlet"
+        "gnomeExtensions.arcmenu"
         "hello"
         "unrar"
       ];
+    };
+    # A package inside a set is held on its own; its siblings stay current.
+    testNestedHeld = {
+      expr = {
+        held = held.gnomeExtensions.arcmenu.outPath;
+        sibling = held.gnomeExtensions.dash-to-dock.outPath;
+        missing = held.gnomeExtensions ? not-in-nixpkgs;
+      };
+      expected = {
+        held = stable.gnomeExtensions.arcmenu.outPath;
+        sibling = pkgs.gnomeExtensions.dash-to-dock.outPath;
+        missing = false;
+      };
+    };
+    # A set held as a whole, with one of its packages fixed on top.
+    testNestedInsideHeldSet = {
+      expr =
+        let
+          both =
+            (import nixpkgs {
+              inherit system;
+              overlays = [
+                (mkHolds {
+                  inherit nixpkgs-stable;
+                  holds = {
+                    gnomeExtensions.from = "stable";
+                    "gnomeExtensions.arcmenu" = {
+                      from = "current";
+                      override = ./fix/figlet.nix;
+                    };
+                  };
+                }).overlay
+              ];
+            }).gnomeExtensions;
+        in
+        {
+          set = both.dash-to-dock.outPath;
+          fixed = both.arcmenu ? fixedWith;
+          arcmenuVersion = both.arcmenu.version;
+        };
+      expected = {
+        set = stable.gnomeExtensions.dash-to-dock.outPath;
+        fixed = true;
+        arcmenuVersion = pkgs.gnomeExtensions.arcmenu.version;
+      };
+    };
+    # The update action reports an unheld copy of a package inside a set.
+    testUnreachedNested = {
+      expr = watch.unreached {
+        pkgs = held;
+        plain = pkgs;
+        names = [ "gnomeExtensions.arcmenu" ];
+        closure = [
+          held.gnomeExtensions.arcmenu.drvPath
+          pkgs.gnomeExtensions.arcmenu.drvPath
+        ];
+      };
+      expected = {
+        "gnomeExtensions.arcmenu" = [ pkgs.gnomeExtensions.arcmenu.drvPath ];
+      };
+    };
+    testNestedReleaseCheck = {
+      expr = (holds.releaseChecks pkgs)."gnomeExtensions.arcmenu".outPath;
+      expected = pkgs.gnomeExtensions.arcmenu.outPath;
     };
     testReleaseChecksMissingReleaseWhen = {
       expr = (missingRelease.releaseChecks pkgs).hello.nixHolds.releaseWhen;
@@ -541,6 +608,19 @@ let
       expected = [
         stable.figlet.version
         true
+      ];
+    };
+    # The override reuses figlet.nix: it only marks the package.
+    testFixNested = {
+      expr = [
+        fixedPkgs.gnomeExtensions.arcmenu.version
+        (fixedPkgs.gnomeExtensions.arcmenu ? fixedWith)
+        (fixedPkgs.gnomeExtensions.dash-to-dock ? fixedWith)
+      ];
+      expected = [
+        pkgs.gnomeExtensions.arcmenu.version
+        true
+        false
       ];
     };
     testFixRelativeNeedsFile = {
