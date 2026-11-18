@@ -478,9 +478,11 @@ case "$command" in
           ref_lock=$(mktemp)
           trap 'rm -f "$ref_lock"' EXIT
           git -C "$lock_dir" show "$previous_commit:./$(basename "$lock")" >"$ref_lock"
-          record_worked "$name" package "with the inputs of ${previous_commit:0:12}"             --reference-lock-file "$ref_lock" --no-write-lock-file || true
+          record_worked "$name" package "with the inputs of ${previous_commit:0:12}" \
+            --reference-lock-file "$ref_lock" --no-write-lock-file || true
         else
-          record_worked "$name" package "nixpkgs ${rev:0:12}, other inputs as they are now"             --override-input "$input" "github:NixOS/nixpkgs/$rev" || true
+          record_worked "$name" package "nixpkgs ${rev:0:12}, other inputs as they are now" \
+            --override-input "$input" "github:NixOS/nixpkgs/$rev" || true
         fi
       fi
     fi
