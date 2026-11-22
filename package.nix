@@ -35,7 +35,7 @@ stdenvNoCC.mkDerivation (finalAttrs: {
     inherit (finalAttrs) pname version src;
     sourceRoot = "${finalAttrs.src.name}/web";
     fetcherVersion = 2;
-    hash = "sha256-uZruw0GK7S/c0ce75qR+9ukaroEXsMo4eYzIia+lu2s=";
+    hash = "sha256-OKaCiWRH5/LirAVoMxjGpuIaKSQLbLngO5aVGnmdPsI=";
   };
 
   npmRoot = "web";
