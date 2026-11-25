@@ -1,0 +1,195 @@
+# Changelog
+
+## 0.5.0 (2026-11-18)
+
+- `hold add --from generation[:N] [--host HOST]` holds what a system
+  generation ran, here or over ssh: it finds the nixpkgs (the generation's,
+  then the lock history) that builds exactly the store path the generation
+  had, for packages that build but broke at runtime. `hold history NAME` shows
+  NAME across the lock history (version, broken, cached where) and the system
+  generations. `--lock` may name another repository's lock.
+- Holds and fixes take packages inside a package set, such as
+  `home-assistant-custom-components.auth_oidc`: the overlay replaces only that
+  attribute of the set. Before, such an entry was skipped without a word.
+- Holds know their last working build: `hold add` on a nixpkgs revision
+  records `worked` (version and store path per system, from the flake's
+  `releaseChecks` on that revision), `hold verify` says whether each hold still
+  builds it, `hold refresh` accepts a changed build. `nix-detour check` and the
+  hold-release action run the verification. releaseChecks entries carry
+  `nixHoldsPackage` and `nixHoldsHeld` for it.
+- `hold add --from previous` reads the default branch's lock history
+  (first parents of `origin/HEAD`, `origin/main` or `origin/master`; `HEAD`
+  only without an `origin` remote), so a lock committed only on a branch is
+  never taken as the last working one.
+- PR entries take packages inside a package set, such as
+  `gnomeExtensions.arcmenu`: the overlay replaces only that attribute of the
+  set. They need their file in `paths`; `pr add <number>` takes it from the
+  PR when the PR changes one package file.
+
+## 0.4.0 (2026-11-13)
+
+- Standalone `package.nix` (`pkgs.callPackage ./package.nix { }`) bundles the
+  CLI, release/PR helpers, overlay expressions and built web dashboard into
+  one derivation with offline `fetchNpmDeps` and `nix-detour --version`.
+
+- `nix-detour check` keeps each PR entry's `untilChannel` unless `--channel`
+  is passed; `pr add`, `pr pin` and `pr remove` take a file lock so concurrent
+  runs don't overwrite each other's entries.
+
+- `pr add`: shorthand syntax accepts PR number or GitHub pull request URL
+  directly (`pr add 587609` or `pr add <url>`), auto-detecting fork repository,
+  package attributes (from `pkgs/by-name`), NixOS modules, and latest commit
+  SHA from GitHub. Supports `--pin` and `--no-pin`.
+- `pr pin`: omitting the commit SHA re-pins the entry to its latest head commit
+  from GitHub; `--all` updates all active entries in the file in one command.
+- `pr check`: upstream PR state and channel landing checks run concurrently in
+  parallel.
+
+- Update action: lists holds a target still has unheld (new `unreached`
+  output and report section), from a package set the holds overlay doesn't
+  reach. On 2026-11-11 a buzz-cli hold changed nothing: cadre's home-manager
+  module installed buzz-app from its own flake's `packages`. `lib.watch.unreached`
+  is the check in Nix.
+
+- Update action: `skip-unmoved: true` does nothing unless the lock moves
+  `input` from `base`'s revision (new `moved` output), so the action can run
+  on every PR that touches the lock. On 2026-11-11 a hand-made nixpkgs bump
+  in kleinbem/nix-config#737 broke five packages that no update run saw.
+
+- hold-release action: `open-prs: false` only checks, and the new `held`
+  output lists the holds that still fail. Pass another system's `held` to
+  `keep` so a hold goes only when it builds on every system you use.
+  `token` is needed only when the action opens PRs.
+
+- Update action: a failed download is not a broken package. Builds use
+  `--fallback`, a failed build is retried once on its own, and one that
+  still fails on a network error (a 5xx or 429 from a cache or source,
+  DNS, connect, timeout) is reported as `unavailable` and never held. A
+  404 still counts as broken. On 2026-11-02 a 502 from a binary cache
+  would otherwise have been reported as a package to hold.
+
+- Update action: commit mode commits only onto the commit it checked out,
+  which on a pull_request event must be the PR head (not the merge commit);
+  a push to the branch during the run fails the commit instead of putting
+  holds checked on the old lock onto the new one. The check compares
+  commits: a `branch` whose head is another commit fails. With `holds-repo`
+  the holds go into a new PR there, so this check doesn't apply. The previous nixpkgs comes
+  from the `flake` directory's flake.lock (it was the repository root's),
+  and the token falls back to the workflow's, so report mode can clone a
+  public `holds-repo` without one.
+
+- pr-pin action: `rev` must be a full commit SHA. pr-merged action: the PRs
+  file is left as it is on the branch for later steps. The actions' commits
+  work on macOS runners too.
+
+- `hold check`: a hold with a malformed `since` is still checked.
+
+- PRs: an entry's `pythonPackages` go into every Python package set (from
+  `pkgs/development/python-modules/<name>`, or `paths."python3Packages.<name>"`),
+  finding the entry's own packages first. A scope from `paths` (a
+  `makeScope` like `mesh-llmPlugins`) works as before, and the checks now
+  list its packages one by one (`<scope>.<name>`), so `pr eval` and
+  `merged` cover each of them.
+
+- PRs: `merged` needs a version on both sides. A PR package without a version
+  stays until you remove its entry, instead of counting as merged as soon as
+  nixpkgs has the attribute.
+
+- Update action: `build: fetches` builds only the fixed-output derivations
+  (sources, vendored dependencies) of the watched packages no substituter
+  has. A hash mismatch never shows in an evaluation; this finds it without
+  compiling the packages, and the report has the hash nix got.
+
+- Fixes: a held package can carry `patches` (URLs pinned by hash, or files
+  next to the holds file) and an `override` file, and `from = "current"`
+  fixes the package of your own nixpkgs instead of holding an older one.
+  A fix ends like a hold, once the unfixed package builds from
+  nixos-unstable. CLI: `nix-detour fix add NAME --patch … | --override …`
+  (and `--patch`, `--override`, `--from current` on `hold add`).
+
+- Web dashboard: holds, fixes, PRs (including shorthand auto-detection and
+  `pythonPackages`) and releases go through the CLI, so revisions, patch URLs
+  and PR head commits are pinned by hash. Supports light and dark themes, font
+  scaling, native `<dialog>` modals, TTL-cached PR status checks, and true
+  empty local files without loading sample data over them. The server refuses
+  cross-site requests, and imported data stays in the page instead of writing
+  to disk.
+
+## 0.3.1 (2026-11-01)
+
+- Update action with `holds-repo`: the holds repository is cloned at the
+  revision the flake's lock has for `holds-input`, so the checks see the
+  holds the lock update was validated with. A failing package the
+  repository holds by now is reported as "update the input" instead of
+  proposed again (and left out of commit mode's PR).
+
+- Update action: when the base branch's flake.lock can't be read (no git
+  checkout, unknown input), it says so instead of stopping with exit 128.
+
+## 0.3.0 (2026-11-01)
+
+Renamed from nix-holds: single packages take a detour from your nixpkgs,
+held back while broken or ahead from an open nixpkgs PR, until nixpkgs
+catches up.
+
+- The repository is `kleinbem-dev/nix-detour`. Web, git and flake URLs
+  redirect; GitHub Actions' `uses:` doesn't, so workflows change
+  `kleinbem-dev/nix-holds@` to `kleinbem-dev/nix-detour/hold-release@` and
+  `kleinbem-dev/nix-holds/<action>@` to `kleinbem-dev/nix-detour/<action>@`.
+- CLI `nix-detour`: holds are under `nix-detour hold` (`add`, `remove`,
+  `list`, `check`), next to `nix-detour pr`. The old top-level commands say
+  where they went.
+- The holds' release action is `kleinbem-dev/nix-detour/hold-release`, next
+  to `pr-pin`, `pr-merged` and `update`.
+- Update action (`kleinbem-dev/nix-detour/update`): on a lock-update PR, it
+  finds what the update broke and holds each package on the nixpkgs before
+  the update, in the same PR (`mode: commit`) or as a report. After each
+  round it checks again: what still fails held is reported, not held, and a
+  failure that shows up only then is held next round (up to 5).
+  - What it checks: targets (`nixDetourTargets`, `lib.watch.target host`),
+    where the package to hold is found in the error's trace however the host
+    reaches it; and watched packages (`nixDetourWatch`, `lib.watch.nixos` or
+    `lib.watch.packages`), each evaluated on its own and built when no
+    substituter has it. The old output names `nixHoldsWatch` and
+    `nixHoldsTargets` still work, with a warning.
+  - Holds kept in another repository: `holds-repo`, `holds-input` and
+    `holds-token`. It clones that repository, checks through
+    `--override-input`, and in commit mode opens a PR there with only its new
+    holds on top of the file as it is then.
+  - `directory` and `nix-args` cover a checkout in a subfolder and flakes
+    that need `--override-input`; `systems` checks other systems' hosts from
+    the same runner (evaluation only).
+  - Outputs `held`, `failed` and a Markdown `report`.
+
+## 0.2.0 (2026-11-01)
+
+- Packages from open nixpkgs PRs: `lib.mkPrs { prs }` (or plain
+  `import ./prs.nix`) builds the packages and NixOS modules of the PRs in a
+  `nixpkgs-prs.json` against your nixpkgs (`overlay`, `packages`,
+  `nixosModules`, `checks`).
+- CLI: `nix-holds pr add`, `pin`, `remove`, `list`, `eval`, `merged`.
+- Actions: `kleinbem-dev/nix-holds/pr-pin` pins an entry and opens the PR;
+  `kleinbem-dev/nix-holds/pr-merged` opens a PR removing each entry nixpkgs
+  has caught up with.
+
+## 0.1.0 (2026-10-31)
+
+First version for use outside the kleinbem fleet.
+
+- `lib.mkHolds { holds, nixpkgs-stable, extraOverlays, config }`: your own
+  holds file gives `overlay`, `nixosTests` and `releaseChecks`.
+- The held package sets get your nixpkgs config (allowUnfree, insecure
+  packages, CUDA/ROCm, ...) instead of a forced `allowUnfree = true`.
+- Release checks build with your own overlays, so holds of your own
+  packages can be released too.
+- Release action (`uses: kleinbem-dev/nix-holds@<sha>`): opens a PR per hold that
+  can go; its `stale` output lists the old ones.
+- CLI: `nix-holds add`, `remove`, `list`, `check`
+  (`nix run github:kleinbem-dev/nix-holds`), for Linux and aarch64-darwin.
+- Release checks carry their hold (`nixHolds`), so `check` and the action
+  read the holds the flake actually uses.
+- Pinned revisions are fetched with `fetchTarball`, so the overlay works
+  without the flakes feature.
+- Removed: the kleinbem fleet's own holds and the outputs built from them
+  (`overlays.default`, `lib.mkOverlay`, `lib.nixosTests`); they live in
+  kleinbem/nix-holds-fleet.

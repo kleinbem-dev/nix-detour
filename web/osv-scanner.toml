@@ -1,0 +1,8 @@
+# picomatch has no fixed release yet (fixes pending: micromatch/picomatch#262 to
+# #266); it comes in only through Vite's build tooling (vite, tinyglobby, fdir)
+# and matches our own build globs, never request data. Short expiry: look again
+# if no release by then.
+[[IgnoredVulns]]
+id = "GHSA-fc5q-39xc-vjpf"
+ignoreUntil = 2026-12-18
+reason = "No fixed picomatch release (<= 4.0.7; fixes pending in micromatch/picomatch#262-#266); build-time only via vite/tinyglobby/fdir, matches trusted build globs"

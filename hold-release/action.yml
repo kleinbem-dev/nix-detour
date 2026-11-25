@@ -1,0 +1,97 @@
+name: nix-detour hold-release
+description: >-
+  Builds what ends each hold from the newest nixpkgs and opens a PR removing
+  every hold that builds again. Run it after installing Nix, from a checkout
+  of the repository with the holds file.
+inputs:
+  token:
+    description: Token that pushes the branch and opens the PR (contents + pull-requests write); not needed with open-prs "false"
+    default: ""
+  flake:
+    description: Flake with the release checks (releaseChecks.<system>.<name> from mkHolds)
+    default: .
+  holds-file:
+    description: The holds file the flake's mkHolds reads, relative to the repository root (edited for the release PRs)
+    default: held-packages.json
+  channel:
+    description: The nixpkgs the release checks build from (overrides the flake's nixpkgs input)
+    default: github:NixOS/nixpkgs/nixos-unstable
+  stale-days:
+    description: A hold older than this is listed in the `stale` output
+    default: "14"
+  open-prs:
+    description: '"false" only builds and sets the outputs, e.g. on a second system whose `held` output goes to `keep`'
+    default: "true"
+  keep:
+    description: Holds to keep even if they build here, separated by spaces (the `held` output of another system's run)
+    default: ""
+outputs:
+  stale:
+    description: Holds older than stale-days that can't go yet, as "name (N days)" separated by spaces; empty if none
+    value: ${{ steps.check.outputs.stale }}
+  held:
+    description: Holds whose release check still fails on this system, separated by spaces; empty if none
+    value: ${{ steps.check.outputs.held }}
+runs:
+  using: composite
+  steps:
+    - name: Build what ends each hold
+      id: check
+      shell: bash
+      env:
+        FLAKE: ${{ inputs.flake }}
+        CHANNEL: ${{ inputs.channel }}
+        STALE_DAYS: ${{ inputs.stale-days }}
+      run: |
+        set -euo pipefail
+        "$GITHUB_ACTION_PATH/../scripts/release-check.sh" "$FLAKE" "$CHANNEL" \
+          | tee "$RUNNER_TEMP/held.txt"
+        stale=$(awk -v d="$STALE_DAYS" '$1 == "held" && $3 > d {printf "%s (%s days) ", $2, $3}' "$RUNNER_TEMP/held.txt")
+        held=$(awk '$1 == "held" {printf "%s ", $2}' "$RUNNER_TEMP/held.txt")
+        echo "stale=$stale" >> "$GITHUB_OUTPUT"
+        echo "held=$held" >> "$GITHUB_OUTPUT"
+
+    - name: Check that each hold still builds what last worked
+      shell: bash
+      env:
+        FLAKE: ${{ inputs.flake }}
+        HOLDS: ${{ inputs.holds-file }}
+      run: |
+        set -uo pipefail
+        # Only warnings (GitHub's bash runs with -e): a hold that can go still gets its PR.
+        "$GITHUB_ACTION_PATH/../scripts/worked.sh" verify "$FLAKE" "$HOLDS" > "$RUNNER_TEMP/worked.txt" || true
+        while read -r kind a b c d; do
+          case $kind in
+            differs) echo "::warning::$a on $b is not the build that last worked ($c, now $d): an overlay or config changes it. If that is on purpose: nix-detour hold refresh $a" ;;
+            unrecorded) echo "$a on $b: no last working build recorded" ;;
+            unchecked) echo "::warning::last working builds not checked on $a: $b $c $d" ;;
+          esac
+        done < "$RUNNER_TEMP/worked.txt"
+
+    - name: Open a PR per hold that can go
+      if: inputs.open-prs == 'true'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        HOLDS: ${{ inputs.holds-file }}
+        KEEP: ${{ inputs.keep }}
+      run: |
+        set -euo pipefail
+        awk '$1 == "release" {print $2}' "$RUNNER_TEMP/held.txt" | while read -r name; do
+          if [[ " $KEEP " == *" $name "* ]]; then
+            echo "$name builds here but is kept: $KEEP"
+            continue
+          fi
+          git checkout -- "$HOLDS"
+          if ! jq -e --arg n "$name" 'has($n)' "$HOLDS" >/dev/null; then
+            echo "::warning::$name can go, but $HOLDS has no entry for it: is it the file the flake's mkHolds reads?"
+            continue
+          fi
+          link=$(jq -r --arg n "$name" '.[$n].link' "$HOLDS")
+          jq --indent 2 --arg n "$name" 'del(.[$n])' "$HOLDS" > "$HOLDS.new"
+          mv "$HOLDS.new" "$HOLDS"
+          "$GITHUB_ACTION_PATH/../scripts/open-signed-pr.sh" "release/$name" "chore: release $name" \
+            "\`$name\` builds from nixos-unstable again, so it no longer needs its hold ($link). A consumer whose nixpkgs is older keeps failing its lock check until it catches up.
+
+        🤖 Opened by the nix-detour release action." "$HOLDS"
+        done
