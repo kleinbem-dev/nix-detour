@@ -1,0 +1,73 @@
+import type { HoldEntry, PrEntry } from './types';
+
+export const initialHolds: Record<string, HoldEntry> = {
+  "agent-task-queue": {
+    "from": {
+      "rev": "02c087f3fe673c9e317f206a627cb6b910336dbe",
+      "narHash": "sha256-IoNisKcGbUjdd45qCqywGMCYmZ5EnkxezvLII0FWwNA="
+    },
+    "since": "2026-10-27",
+    "releaseWhen": "python3Packages.fastmcp",
+    "reason": "Needs python3Packages.fastmcp, marked broken in nixos-unstable since mcp 2.x; nixos-nvme's home-manager MCP config failed to evaluate.",
+    "link": "https://github.com/NixOS/nixpkgs/pull/563493"
+  },
+  "aider-chat": {
+    "from": {
+      "rev": "02c087f3fe673c9e317f206a627cb6b910336dbe",
+      "narHash": "sha256-IoNisKcGbUjdd45qCqywGMCYmZ5EnkxezvLII0FWwNA="
+    },
+    "since": "2026-10-27",
+    "reason": "Needs python3Packages.posthog, marked broken in nixos-unstable since mcp 2.x; mac-mini's persona-runtime failed to evaluate, which held back the fleet's whole lock update.",
+    "link": "https://github.com/NixOS/nixpkgs/pull/578265"
+  },
+  "open-webui": {
+    "from": {
+      "rev": "02c087f3fe673c9e317f206a627cb6b910336dbe",
+      "narHash": "sha256-IoNisKcGbUjdd45qCqywGMCYmZ5EnkxezvLII0FWwNA="
+    },
+    "since": "2026-10-28",
+    "releaseWhen": "python3Packages.posthog",
+    "reason": "Needs python3Packages.chromadb, which needs posthog, marked broken in nixos-unstable since mcp 2.x; the container-factory's open-webui container failed to evaluate.",
+    "link": "https://github.com/NixOS/nixpkgs/pull/578265"
+  },
+  "oterm": {
+    "from": {
+      "rev": "02c087f3fe673c9e317f206a627cb6b910336dbe",
+      "narHash": "sha256-IoNisKcGbUjdd45qCqywGMCYmZ5EnkxezvLII0FWwNA="
+    },
+    "since": "2026-10-27",
+    "releaseWhen": "python3Packages.fastmcp",
+    "reason": "Needs python3Packages.fastmcp, marked broken in nixos-unstable since mcp 2.x; nix-devshells' ai shell failed to evaluate.",
+    "link": "https://github.com/NixOS/nixpkgs/pull/563493"
+  },
+  "qdrant": {
+    "from": "current",
+    "since": "2026-11-01",
+    "patches": [
+      {
+        "url": "https://raw.githubusercontent.com/MiniHarinn/nixpkgs/b650fbaa91851f4e57f66ab811fdffcd5bac31c1/pkgs/by-name/qd/qdrant/0001-disable-avx512vnni.patch",
+        "hash": "sha256-QyG5gTn2LfZwPVTGWcTnNoc7oq830Wv/VyNmEbPDN+c="
+      }
+    ],
+    "reason": "rustc's stdarch and nixpkgs' LLVM disagree on an AVX-512 VNNI intrinsic (vpdpbusd), so qdrant's quantization crate fails to compile; this source patch from NixOS/nixpkgs#553347 disables those code paths. Ends once nixpkgs' qdrant builds again (rustc on LLVM 23, NixOS/nixpkgs#578990, plus a zstd input on staging-next).",
+    "link": "https://github.com/NixOS/nixpkgs/issues/553191"
+  }
+};
+
+export const initialPrs: Record<string, PrEntry> = {
+  "mesh-llm": {
+    "pr": 571722,
+    "owner": "kleinbem",
+    "repo": "nixpkgs",
+    "rev": "e44c2089f66718cfd107a75908b97ce93d0ba8f6",
+    "narHash": "sha256-3pY2R9K7H31+Xq8oA3uS6Uu5BvV4l8G4a9M1l2K3J4E=",
+    "attrs": ["mesh-llm", "skippy"],
+    "scope": ["skippy-runtime"],
+    "paths": {
+      "skippy": "pkgs/development/python-modules/skippy/default.nix"
+    },
+    "modules": {
+      "mesh-llm": "nixos/modules/services/misc/mesh-llm.nix"
+    }
+  }
+};

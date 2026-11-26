@@ -1,0 +1,10 @@
+@import "tailwindcss";
+@source "../node_modules/@kleinbem/web-config";
+@import "@kleinbem/web-config/theme";
+@import "@kleinbem/web-config/base.css";
+@import "@kleinbem/web-config/badges.css";
+
+dialog::backdrop {
+  background: rgb(0 0 0 / 0.65);
+  backdrop-filter: blur(4px);
+}
