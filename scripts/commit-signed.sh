@@ -12,9 +12,16 @@ shift 2
 repo="${GITHUB_REPOSITORY:?}"
 head="${EXPECTED_HEAD:-$(gh api "repos/$repo/git/ref/heads/$branch" --jq .object.sha)}"
 
+tmp_b64=$(mktemp)
+trap 'rm -f "$tmp_b64"' EXIT
+repo_root=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
+
 additions='[]'
 for path in "$@"; do
-  additions=$(jq --arg p "$path" --rawfile c <(base64 <"$path" | tr -d '\n') '. + [{path: $p, contents: $c}]' <<<"$additions")
+  rel_path=$(realpath --relative-to="$repo_root" "$path")
+  [[ $rel_path != ../* && $rel_path != /* ]] || { echo "commit-signed.sh: path outside repository: $path" >&2; exit 1; }
+  base64 <"$path" | tr -d '\n' >"$tmp_b64"
+  additions=$(jq --arg p "$rel_path" --rawfile c "$tmp_b64" '. + [{path: $p, contents: $c}]' <<<"$additions")
 done
 
 jq -n \

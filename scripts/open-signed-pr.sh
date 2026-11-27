@@ -22,11 +22,15 @@ else
   gh api "repos/$repo/git/refs" -f ref="refs/heads/$branch" -f sha="$main_sha" >/dev/null
 fi
 
+tmp_b64=$(mktemp)
+trap 'rm -f "$tmp_b64"' EXIT
+
 additions='[]' deletions='[]'
 for path in "$@"; do
   if [[ -e $path ]]; then
     # Files, not arguments: a file's base64 can be longer than one argument may be.
-    additions=$(jq --arg p "$path" --rawfile c <(base64 <"$path" | tr -d '\n') '. + [{path: $p, contents: $c}]' <<<"$additions")
+    base64 <"$path" | tr -d '\n' >"$tmp_b64"
+    additions=$(jq --arg p "$path" --rawfile c "$tmp_b64" '. + [{path: $p, contents: $c}]' <<<"$additions")
   else
     deletions=$(jq --arg p "$path" '. + [{path: $p}]' <<<"$deletions")
   fi
