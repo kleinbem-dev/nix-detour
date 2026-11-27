@@ -18,8 +18,8 @@ repo_root=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
 
 additions='[]'
 for path in "$@"; do
-  rel_path=$(realpath --relative-to="$repo_root" "$path")
-  [[ $rel_path != ../* && $rel_path != /* ]] || { echo "commit-signed.sh: path outside repository: $path" >&2; exit 1; }
+  rel_path=$(realpath --relative-to="$repo_root" -- "$path")
+  [[ $rel_path != .. && $rel_path != ../* && $rel_path != . && $rel_path != /* ]] || { echo "commit-signed.sh: path outside repository: $path" >&2; exit 1; }
   base64 <"$path" | tr -d '\n' >"$tmp_b64"
   additions=$(jq --arg p "$rel_path" --rawfile c "$tmp_b64" '. + [{path: $p, contents: $c}]' <<<"$additions")
 done
