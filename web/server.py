@@ -50,6 +50,7 @@ log = logging.getLogger("nix-detour")
 PR_CACHE: dict[str, tuple[float, dict]] = {}
 CACHE_LOCK = threading.Lock()
 FILE_LOCK = threading.Lock()
+CLI_LOCK = threading.Lock()
 
 
 def _detect_git_root() -> str | None:
@@ -198,7 +199,8 @@ def fetch_pr_status(pr_number: int, upstream: str = "NixOS/nixpkgs", channel: st
 def hold_add_argv(name: str, kind: str, entry: dict, target: str) -> list[str]:
     if not valid_name(name):
         raise ValueError(f"invalid package name {name!r}")
-    src = entry.get("from", "current")
+    default_from = "current" if kind == "fix" else "previous"
+    src = entry.get("from", default_from)
     if isinstance(src, dict):
         src = src.get("rev", "")
     if not isinstance(src, str) or not src or src.startswith("-"):
@@ -360,7 +362,7 @@ class DetourHandler(http.server.SimpleHTTPRequestHandler):
 
     def _run_cli(self, argv: list[str], target: str, timeout: int) -> None:
         try:
-            with FILE_LOCK:
+            with CLI_LOCK:
                 os.makedirs(os.path.dirname(target), exist_ok=True)
                 res = subprocess.run(argv, cwd=os.path.dirname(target), capture_output=True, text=True, timeout=timeout, check=False)
         except subprocess.TimeoutExpired:
@@ -484,8 +486,8 @@ class DetourHandler(http.server.SimpleHTTPRequestHandler):
             target, _ = resolve_file(args.holds, "held-packages.json")
             argv = [CLI, "hold", "remove", "--file", target, "--", name]
         else:
-            target, _ = resolve_file(args.holds, "held-packages.json")
-            argv = [CLI, "release", "--", name, os.path.dirname(target)]
+            self._send_json(400, {"ok": False, "error": "kind must be hold, fix, or pr"})
+            return
         self._run_cli(argv, target, timeout=30)
 
 
