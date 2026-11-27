@@ -1,0 +1,299 @@
+#!/usr/bin/env bash
+# Usage: scripts/hold.sh RESULTS
+#
+# RESULTS is update.sh's output. Holds each broken package on the nixpkgs of
+# BASE's flake.lock and reruns update.sh, up to 5 rounds, since a target only
+# shows its next failure once the first is held. One that still fails held (or
+# was held already) is reported instead. Without a holds file nothing is checked.
+# With HOLDS_REPO (cloned by clone-holds.sh), commit mode opens a PR there.
+#
+# Environment: FLAKE, HOLDS, INPUT, BASE, MODE (commit|report), BRANCH,
+# BUILD (true|fetches|false), NIX_DETOUR_ARGS, GH_TOKEN, HOLDS_REPO, HOLDS_INPUT,
+# EXPECTED_HEAD (default: the checkout's HEAD outside pull_request events),
+# HOLDS_TOKEN; RUNNER_TEMP, GITHUB_OUTPUT, GITHUB_STEP_SUMMARY and
+# GITHUB_REPOSITORY as on GitHub.
+set -euo pipefail
+
+here=$(dirname "$(realpath "$0")")
+(($# >= 1)) || { echo "Usage: scripts/hold.sh RESULTS" >&2; exit 1; }
+results="$1"
+if command -v nix-detour >/dev/null 2>&1; then
+  cli=(nix-detour)
+else
+  cli=("$here/nix-detour.sh")
+fi
+args=()
+case $BUILD in
+  true) ;;
+  fetches) args+=(--build-fetches) ;;
+  *) args+=(--no-build) ;;
+esac
+
+git fetch -q --depth 1 origin "$BASE" || { echo "cannot fetch $BASE from origin (is this a git checkout of the repository?)" >&2; exit 1; }
+# ./ makes the path relative to this directory, like FLAKE.
+base_lock=$(git show "FETCH_HEAD:./${FLAKE%/}/flake.lock") || { echo "$BASE has no $FLAKE/flake.lock" >&2; exit 1; }
+jq -e . <<<"$base_lock" >/dev/null || { echo "$BASE's flake.lock is not valid JSON" >&2; exit 1; }
+# shellcheck disable=SC2016  # jq program
+previous=$(jq -er --arg i "$INPUT" '
+  . as $lock | def nodeof($segs): reduce $segs[] as $s ($lock.root // "root";
+    if . == null then null else ($lock.nodes[.].inputs[$s] // null)
+    | if type == "array" then nodeof(.) else . end end);
+  $lock.nodes[nodeof($i | split("/"))].locked.rev // empty' <<<"$base_lock") \
+  || { echo "no input $INPUT in $BASE's flake.lock" >&2; exit 1; }
+
+all="$RUNNER_TEMP/all.txt"
+cp "$results" "$all"
+# The reason update.sh gave for NAME the first time.
+reason() {
+  awk -v n="$1" '$1 == "broken" && $2 == n {$1 = $2 = ""; sub(/^ +/, ""); print; exit}' "$all"
+}
+has() {
+  local name="$1"
+  shift
+  printf '%s\n' "$@" | grep -qxF -- "$name"
+}
+
+holds_repo="${HOLDS_REPO:-}"
+# Commit mode commits only onto the head the holds are computed on, so the
+# checkout must be that head (on a pull_request event, not the merge commit),
+# and a push meanwhile fails the commit.
+if [[ ${MODE:-} == commit && -z $holds_repo ]]; then
+  checkout=$(git rev-parse HEAD)
+  if [[ -z ${EXPECTED_HEAD:-} ]]; then
+    case ${GITHUB_EVENT_NAME:-} in
+      pull_request*)
+        echo "::error::commit mode on a pull_request event commits only to the PR's own branch, not $BRANCH" >&2
+        exit 1
+        ;;
+    esac
+    EXPECTED_HEAD=$checkout
+  elif [[ $EXPECTED_HEAD != "$checkout" ]]; then
+    echo "::error::the checkout ($checkout) is not the PR head ($EXPECTED_HEAD): check out with ref: \${{ github.event.pull_request.head.sha }}" >&2
+    exit 1
+  fi
+  export EXPECTED_HEAD
+fi
+# The flake whose releaseChecks read HOLDS: where a new hold records the
+# build that last worked.
+holds_flake="$FLAKE"
+if [[ -n $holds_repo ]]; then
+  # Cloned by clone-holds.sh, which also points every check at the clone.
+  clone="${NIX_DETOUR_HOLDS_CLONE:?run clone-holds.sh first}"
+  holds_file="$HOLDS"
+  [[ -z $holds_file ]] || HOLDS="$clone/$holds_file"
+  holds_flake="$clone"
+fi
+
+held=() failed=() unchecked=() unverified=()
+checked=false
+if [[ -e $HOLDS ]]; then
+  checked=true
+  cp "$HOLDS" "$RUNNER_TEMP/holds.before"
+fi
+
+round="$results"
+for n in 1 2 3 4 5 6; do
+  mapfile -t names < <(awk '$1 == "broken" {print $2}' "$round" | sort -u)
+  new=()
+  for name in "${names[@]}"; do
+    if has "$name" "${failed[@]}"; then
+      continue
+    elif has "$name" "${held[@]}"; then
+      # Held in this run and still failing.
+      failed+=("$name")
+      mapfile -t held < <(printf '%s\n' "${held[@]}" | grep -vxF -- "$name" || true)
+      "${cli[@]}" hold remove --file "$HOLDS" -- "$name"
+    elif $checked && jq -e --arg n "$name" 'has($n)' "$RUNNER_TEMP/holds.before" >/dev/null; then
+      failed+=("$name")
+    else
+      new+=("$name")
+    fi
+  done
+  ((${#new[@]})) || break
+  if ! $checked; then
+    unchecked=("${new[@]}")
+    break
+  fi
+  if ((n == 6)); then
+    unchecked=("${new[@]}")
+    break
+  fi
+  for name in "${new[@]}"; do
+    "${cli[@]}" hold add --file "$HOLDS" --flake "$holds_flake" --from "$previous" \
+      --reason "Broken by the lock update: $(reason "$name")" -- "$name"
+    held+=("$name")
+  done
+  round="$RUNNER_TEMP/round$n.txt"
+  # A command substitution, so a failing run fails the step instead of
+  # passing for "nothing fails any more".
+  output=$("$here/update.sh" "$FLAKE" "${args[@]}")
+  printf '%s\n' "$output" | tee "$round" >>"$all"
+done
+mapfile -t unattributed < <(awk '$1 == "unattributed" {print $2}' "$round" | sort -u)
+# A download failed (cache or network down): no hold, the next run checks again.
+# The last round decides; a package broken on one system and unavailable on
+# another counts as broken.
+mapfile -t unavailable < <(awk '$1 == "broken" {b[$2] = 1} $1 == "unavailable" {u[$2] = 1}
+  END {for (n in u) if (!(n in b)) print n}' "$round" | sort -u)
+# A hold whose last check couldn't download is not shown to work. The others
+# were only checked alongside it, so commit mode then commits nothing.
+for name in "${unavailable[@]}"; do
+  if has "$name" "${held[@]}"; then
+    unverified+=("$name")
+    mapfile -t held < <(printf '%s\n' "${held[@]}" | grep -vxF -- "$name" || true)
+  fi
+done
+
+# With HOLDS_REPO, the clone is at the revision the lock has. A hold that the
+# holds repository has by now needs a lock update of HOLDS_INPUT, not a new
+# hold. A failed read stops here: committing over a file we couldn't read
+# would drop its holds.
+ahead=()
+if $checked && [[ -n $holds_repo ]] && ((${#held[@]} + ${#failed[@]})); then
+  if [[ -d $holds_repo ]]; then
+    current=$(git -C "$holds_repo" show "HEAD:$holds_file")
+  else
+    current=$(GH_TOKEN="${HOLDS_TOKEN:-${GH_TOKEN:-}}" gh api "repos/$holds_repo/contents/$holds_file" \
+      -H "Accept: application/vnd.github.raw")
+  fi
+  jq -e 'type == "object"' <<<"$current" >/dev/null || { echo "$holds_repo: $holds_file is not a JSON object" >&2; exit 1; }
+  mapfile -t ahead < <(
+    for name in "${held[@]}"; do
+      if jq -e --arg n "$name" 'has($n)' <<<"$current" >/dev/null; then echo "$name"; fi
+    done
+    # One that fails held, when the repository's entry is newer than the
+    # lock's (a patch, another revision): updating the input may fix it.
+    for name in "${failed[@]}"; do
+      if jq -e --arg n "$name" --slurpfile b "$RUNNER_TEMP/holds.before" \
+        'has($n) and (.[$n] != ($b[0][$n] // null))' <<<"$current" >/dev/null; then echo "$name"; fi
+    done)
+  if ((${#ahead[@]})); then
+    mapfile -t held < <(printf '%s\n' "${held[@]}" | grep -vxF -f <(printf '%s\n' "${ahead[@]}") || true)
+    mapfile -t failed < <(printf '%s\n' "${failed[@]}" | grep -vxF -f <(printf '%s\n' "${ahead[@]}") || true)
+  fi
+fi
+
+# Holds a target still has unheld (another package set, the overlay doesn't
+# reach it): that hold can't fix the target.
+unreached=() reachUnchecked=()
+if $checked; then
+  "$here/reach.sh" "$FLAKE" "$HOLDS" >"$RUNNER_TEMP/unreached.txt" || true
+  mapfile -t unreached < <(awk '$1 == "unreached" {print $2}' "$RUNNER_TEMP/unreached.txt" | sort -u)
+  mapfile -t reachUnchecked < <(awk '$1 == "unchecked" {print $2}' "$RUNNER_TEMP/unreached.txt" | sort -u)
+fi
+
+line() {
+  echo "- \`$1\`: $(reason "$1")"
+}
+commit=false
+[[ $MODE == commit ]] && ((${#unverified[@]} == 0)) && commit=true
+{
+  if ((${#held[@]})); then
+    if $commit; then
+      echo "Held on nixpkgs ${previous:0:12}, the one before this update:"
+    elif [[ $MODE == commit ]]; then
+      echo "To hold on nixpkgs ${previous:0:12}, not committed: a download failed while checking ${unverified[*]}:"
+    else
+      echo "To hold on nixpkgs ${previous:0:12} (they work there):"
+    fi
+    echo
+    for name in "${held[@]}"; do line "$name"; done
+    echo
+  fi
+  if ((${#unchecked[@]})); then
+    if $checked; then
+      echo "To hold, not checked yet (more than 5 rounds):"
+    else
+      echo "To hold on nixpkgs ${previous:0:12} (not checked: no holds file at $HOLDS):"
+    fi
+    echo
+    for name in "${unchecked[@]}"; do line "$name"; done
+    echo
+  fi
+  if ((${#ahead[@]})); then
+    echo "Held in $holds_repo already, but your lock has an older revision of it: update the $HOLDS_INPUT input:"
+    echo
+    for name in "${ahead[@]}"; do line "$name"; done
+    echo
+  fi
+  if ((${#failed[@]})); then
+    echo "Still fail when held (on nixpkgs ${previous:0:12}, or held already), so a hold doesn't help:"
+    echo
+    for name in "${failed[@]}"; do line "$name"; done
+    echo
+  fi
+  if ((${#unattributed[@]})); then
+    echo "Fail, but no package to hold was found in the error:"
+    echo
+    for target in "${unattributed[@]}"; do
+      echo "- \`$target\`: $(awk -v n="$target" '$1 == "unattributed" && $2 == n {$1 = $2 = ""; sub(/^ +/, ""); print; exit}' "$round")"
+    done
+    echo
+  fi
+  if ((${#unavailable[@]})); then
+    echo "Not checked, a download failed (the cache or network, not this update):"
+    echo
+    for name in "${unavailable[@]}"; do
+      echo "- \`$name\`: $(awk -v n="$name" '$1 == "unavailable" && $2 == n {$1 = $2 = ""; sub(/^ +/, ""); print; exit}' "$round")"
+    done
+    echo
+  fi
+  if ((${#unreached[@]})); then
+    echo "Held, but a target also has another derivation of the same name: one from a package set the holds overlay doesn't reach (another flake's \`packages\`, an \`import nixpkgs\`), which the hold can't fix, or an override of the held package:"
+    echo
+    while read -r kind name target drv; do
+      [[ $kind == unreached ]] || continue
+      echo "- \`$name\` in \`$target\`: \`$drv\`"
+    done <"$RUNNER_TEMP/unreached.txt"
+    echo
+  fi
+  if ((${#reachUnchecked[@]})); then
+    echo "Not checked whether the holds reach these targets:"
+    echo
+    while read -r kind target why; do
+      [[ $kind == unchecked ]] || continue
+      echo "- \`$target\`: $why"
+    done <"$RUNNER_TEMP/unreached.txt"
+    echo
+  fi
+  ((${#held[@]} + ${#ahead[@]} + ${#unchecked[@]} + ${#failed[@]} + ${#unattributed[@]} + ${#unavailable[@]} + ${#unreached[@]} + ${#reachUnchecked[@]})) || echo "Nothing fails."
+} >"$RUNNER_TEMP/report.md"
+cat "$RUNNER_TEMP/report.md" >>"$GITHUB_STEP_SUMMARY"
+
+if $checked; then
+  if $commit && ((${#held[@]})); then
+    if [[ -n $holds_repo ]]; then
+      # Only the new holds, on the holds file as it is now: changes merged
+      # there during the checks stay.
+      jq --indent 2 --argjson current "$current" \
+        '$current + with_entries(select(.key | IN($ARGS.positional[]))) | to_entries | sort_by(.key) | from_entries' \
+        "$HOLDS" --args "${held[@]}" </dev/null >"$HOLDS.new"
+      mv "$HOLDS.new" "$HOLDS"
+      body="$(cat "$RUNNER_TEMP/report.md")
+
+Found by the nix-detour update action on ${GITHUB_REPOSITORY:-the lock update}."
+      (cd "$clone" && GITHUB_REPOSITORY="$holds_repo" GH_TOKEN="${HOLDS_TOKEN:-${GH_TOKEN:-}}" \
+        "$here/open-signed-pr.sh" nix-detour/holds "chore: hold ${held[*]}" "$body" "$holds_file")
+    else
+      "$here/commit-signed.sh" "$BRANCH" "chore: hold ${held[*]}" "$HOLDS"
+    fi
+  else
+    cp "$RUNNER_TEMP/holds.before" "$HOLDS"
+  fi
+fi
+{
+  # In report mode, "held" means "to hold".
+  if [[ $MODE == commit ]]; then
+    # Only what was committed; nothing when an unverified hold stopped it.
+    if $commit; then echo "held=${held[*]}"; else echo "held="; fi
+  else
+    echo "held=$(echo "${held[*]} ${unchecked[*]}" | xargs)"
+  fi
+  echo "failed=$(echo "${failed[*]} ${unattributed[*]}" | xargs)"
+  echo "unavailable=${unavailable[*]}"
+  echo "ahead=${ahead[*]}"
+  echo "unreached=${unreached[*]}"
+  echo "report<<NIX_DETOUR_REPORT"
+  cat "$RUNNER_TEMP/report.md"
+  echo "NIX_DETOUR_REPORT"
+} >>"$GITHUB_OUTPUT"
